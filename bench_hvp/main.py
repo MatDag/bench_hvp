@@ -119,7 +119,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--batch-size', '-b', type=int, default=16,
                         help='Batch size.')
-    
+
     args = parser.parse_args()
 
     n_reps = args.n_reps
