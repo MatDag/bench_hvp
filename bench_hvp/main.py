@@ -51,7 +51,7 @@ def run_one(size, n_reps=10, batch_size=16, num_classes=1000):
     }
 
     key, subkey = jax.random.split(key)
-    model = init_model(size)
+    model = init_model(size)(num_classes=num_classes)
     init = model.init(key, batch['images'], train=True)
     grad_fun = jax.jit(
         lambda x: jax.grad(loss_fn)(x, model, batch, init['batch_stats'])
@@ -95,7 +95,7 @@ def run_bench(sizes, batch_size=16, n_reps=10, num_classes=1000, n_jobs=1):
     run = partial(run_one, n_reps=n_reps, batch_size=batch_size,
                   num_classes=num_classes)
 
-    res = Parallel(n_jobs=n_jobs, verbose=10)(
+    res = Parallel(n_jobs=n_jobs)(
         delayed(run)(size) for size in tqdm.tqdm(sizes)
     )
     all_results = []
@@ -127,6 +127,5 @@ if __name__ == '__main__':
     n_jobs = args.n_jobs
 
     SIZES = jnp.arange(5, 50, 5)
-
     df = run_bench(SIZES, batch_size=batch_size, n_reps=n_reps, n_jobs=n_jobs)
     df.to_parquet('../outputs/bench_hvp.parquet')
