@@ -126,7 +126,7 @@ if __name__ == '__main__':
     batch_size = args.batch_size
     n_jobs = args.n_jobs
 
-    SIZES = jnp.arange(2, 50, 25)
+    SIZES = jnp.arange(5, 50, 5)
 
     df = run_bench(SIZES, batch_size=batch_size, n_reps=n_reps, n_jobs=n_jobs)
     df.to_parquet('../outputs/bench_hvp.parquet')
