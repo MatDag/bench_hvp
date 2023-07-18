@@ -80,8 +80,9 @@ def run_one(size, n_reps=10, batch_size=16, num_classes=1000):
     grad_mean = grad_times.mean()
     grad_std = grad_times.std()
     return dict(
-        deepth=2+3*(3+8+size+3), hvp_mean_time=hvp_mean, hvp_std_time=hvp_std,
-        grad_mean_time=grad_mean, grad_std_time=grad_std,
+        depth=float(2+3*(3+8+size+3)), hvp_mean_time=float(hvp_mean),
+        hvp_std_time=float(hvp_std),
+        grad_mean_time=float(grad_mean), grad_std_time=float(grad_std),
     )
 
 
@@ -100,8 +101,7 @@ def run_bench(sizes, batch_size=16, n_reps=10, num_classes=1000, n_jobs=1):
     )
     all_results = []
     for r in res:
-        all_results.extend(r)
-
+        all_results.append(r)
     return pd.DataFrame(all_results)
 
 
