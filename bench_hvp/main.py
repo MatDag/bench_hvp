@@ -1,12 +1,18 @@
-import models
+from models import ResNet, BottleneckResNetBlock
 
 import jax
 import optax
 import jax.numpy as jnp
 from flax.training import common_utils
 
+import pandas as pd
+from functools import partial
+
 from time import perf_counter
 
+import tqdm
+from joblib import Memory, Parallel, delayed
+mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
 
@@ -35,74 +41,92 @@ def loss_fn(params, model, batch, batch_stats):
     return loss
 
 
-def run_one(x, v, hvp, n_reps=10):
-    times = jnp.zeros(n_reps)
-
-    for k in range(n_reps):
-        start = perf_counter()
-        hvp(x, v)
-        end = perf_counter() - start
-        times = times.at[k].set(end)
-    return times.mean(), times.std()
-
-
-if __name__ == '__main__':
-    import pandas as pd
-
-    N_REPS = 20
-
-    MODELS_LIST = [
-        models.ResNet18,
-        models.ResNet34,
-        models.ResNet50,
-        models.ResNet101,
-        models.ResNet152,
-        models.ResNet200,
-    ]
-
-    BATCH_SIZE = 16
+@mem.cache
+def run_one(size, n_reps=10, batch_size=16, num_classes=1000):
     key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
     batch = {
-        'images': jax.random.normal(key, (BATCH_SIZE, 224, 224, 3)),
-        'labels': jax.random.randint(subkey, (BATCH_SIZE,), 0, NUM_CLASSES)
+        'images': jax.random.normal(key, (batch_size, 224, 224, 3)),
+        'labels': jax.random.randint(subkey, (batch_size,), 0, num_classes)
     }
 
     key, subkey = jax.random.split(key)
+    model = init_model(size)
+    init = model.init(key, batch['images'], train=True)
+    grad_fun = jax.jit(
+        lambda x: jax.grad(loss_fn)(x, model, batch, init['batch_stats'])
+    )
+    hvp_fun = jax.jit(
+        lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
+    )
+    v = grad_fun(init['params'])  # First run to get a v and for compilation
+    hvp_fun(init['params'], v)  # First run for compilation
 
-    times_means = jnp.zeros((len(MODELS_LIST)))
-    times_stds = jnp.zeros((len(MODELS_LIST)))
+    hvp_times = jnp.zeros(n_reps)
+    grad_times = jnp.zeros(n_reps)
 
-    grad_times_means = jnp.zeros((len(MODELS_LIST)))
-    grad_times_stds = jnp.zeros((len(MODELS_LIST)))
-
-    for i, model_cls in enumerate(MODELS_LIST):
-        print(i)
-        model = model_cls(num_classes=NUM_CLASSES)
-        init = model.init(key, batch['images'], train=True)
-        grad_fn = jax.jit(
-            lambda x: jax.grad(loss_fn)(x, model, batch, init['batch_stats'])
-        )
-        hvp_fun = jax.jit(
-            lambda x, v: jax.jvp(grad_fn, (x, ), (v, ))[1]
-        )
-        v = grad_fn(init['params'])
+    for k in range(n_reps):
+        start = perf_counter()
         hvp_fun(init['params'], v)
-        print('run hvp')
-        mean, std = run_one(init['params'], v, hvp_fun, n_reps=N_REPS)
-        times_means = times_means.at[i].set(mean)
-        times_stds = times_stds.at[i].set(std)
+        end = perf_counter() - start
+        hvp_times = hvp_times.at[k].set(end)
+        start = perf_counter()
+        grad_fun(init['params'])
+        end = perf_counter() - start
+        grad_times = grad_times.at[k].set(end)
 
-        print('run grad')
-        mean, std = run_one(init['params'], v,
-                            jax.jit(lambda x, v: grad_fn(x)),
-                            n_reps=N_REPS)
-        grad_times_means = grad_times_means.at[i].set(mean)
-        grad_times_stds = grad_times_stds.at[i].set(std)
+    hvp_mean = hvp_times.mean()
+    hvp_std = hvp_times.std()
+    grad_mean = grad_times.mean()
+    grad_std = grad_times.std()
+    return dict(
+        deepth=2+3*(3+8+size+3), hvp_mean_time=hvp_mean, hvp_std_time=hvp_std,
+        grad_mean_time=grad_mean, grad_std_time=grad_std,
+    )
 
-    pd.DataFrame(
-        {'mean': times_means, 'std': times_stds},
-    ).to_parquet('hvp_df.parquet')
-    pd.DataFrame(
-        {'mean': grad_times_means, 'std': grad_times_stds},
-    ).to_parquet('grad_df.parquet')
+
+def init_model(size):
+    model = partial(ResNet, stage_sizes=[3, 8, size, 3],
+                    block_cls=BottleneckResNetBlock)
+    return model
+
+
+def run_bench(sizes, batch_size=16, n_reps=10, num_classes=1000, n_jobs=1):
+    run = partial(run_one, n_reps=n_reps, batch_size=batch_size,
+                  num_classes=num_classes)
+
+    res = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(run)(size) for size in tqdm.tqdm(sizes)
+    )
+    all_results = []
+    for r in res:
+        all_results.extend(r)
+
+    return pd.DataFrame(all_results)
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Benchmark for logreg hyperparameter selection.'
+    )
+
+    parser.add_argument('--n-jobs', '-j', type=int, default=1,
+                        help='# of parallel runs.')
+
+    parser.add_argument('--n-reps', '-r', type=int, default=1,
+                        help='# of repetitions.')
+
+    parser.add_argument('--batch-size', '-b', type=int, default=16,
+                        help='Batch size.')
+    
+    args = parser.parse_args()
+
+    n_reps = args.n_reps
+    batch_size = args.batch_size
+    n_jobs = args.n_jobs
+
+    SIZES = jnp.arange(2, 50, 25)
+
+    df = run_bench(SIZES, batch_size=batch_size, n_reps=n_reps, n_jobs=n_jobs)
+    df.to_parquet('../outputs/bench_hvp.parquet')
