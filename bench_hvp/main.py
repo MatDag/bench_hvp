@@ -46,7 +46,7 @@ def run_one(size, n_reps=10, batch_size=16, num_classes=1000):
     key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
     batch = {
-        'images': jax.random.normal(key, (batch_size, 224, 224, 3)),
+        'images': jax.random.normal(key, (batch_size, 128, 128, 3)),
         'labels': jax.random.randint(subkey, (batch_size,), 0, num_classes)
     }
 
@@ -67,11 +67,11 @@ def run_one(size, n_reps=10, batch_size=16, num_classes=1000):
 
     for k in range(n_reps):
         start = perf_counter()
-        hvp_fun(init['params'], v)
+        jax.block_until_ready(hvp_fun(init['params'], v))
         end = perf_counter() - start
         hvp_times = hvp_times.at[k].set(end)
         start = perf_counter()
-        grad_fun(init['params'])
+        jax.block_until_ready(grad_fun(init['params']))
         end = perf_counter() - start
         grad_times = grad_times.at[k].set(end)
 
