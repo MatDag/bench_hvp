@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 
-df = pd.read_parquet('../outputs/bench_hvp64.parquet')
+df = pd.read_parquet('../outputs/bench_hvp16.parquet')
 
 plt.figure(figsize=(6, 4))
 
@@ -19,4 +19,4 @@ plt.xlabel("Depth")
 plt.ylabel("Time [sec]")
 plt.legend()
 
-plt.savefig('bench_hvp64.pdf', dpi=300)
+plt.savefig('bench_hvp16.pdf', dpi=300)
