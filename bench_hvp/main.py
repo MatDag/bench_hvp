@@ -10,8 +10,15 @@ from functools import partial
 
 from time import perf_counter
 
-import tqdm
-from joblib import Memory, Parallel, delayed
+from memory_profiler import memory_usage
+
+import yaml
+import submitit
+import itertools
+from rich import progress
+from submitit.helpers import as_completed
+
+from joblib import Memory
 mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
@@ -42,7 +49,7 @@ def loss_fn(params, model, batch, batch_stats):
 
 
 @mem.cache
-def run_one(size, n_reps=10, batch_size=16, num_classes=1000):
+def run_one(size, rep, batch_size=16, num_classes=1000):
     key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
     batch = {
@@ -62,27 +69,23 @@ def run_one(size, n_reps=10, batch_size=16, num_classes=1000):
     v = grad_fun(init['params'])  # First run to get a v and for compilation
     hvp_fun(init['params'], v)  # First run for compilation
 
-    hvp_times = jnp.zeros(n_reps)
-    grad_times = jnp.zeros(n_reps)
+    hvp_mem = memory_usage((hvp_fun, (init['params'], v)))
+    start = perf_counter()
+    jax.block_until_ready(hvp_fun(init['params'], v))
+    hvp_time = perf_counter() - start
 
-    for k in range(n_reps):
-        start = perf_counter()
-        jax.block_until_ready(hvp_fun(init['params'], v))
-        end = perf_counter() - start
-        hvp_times = hvp_times.at[k].set(end)
-        start = perf_counter()
-        jax.block_until_ready(grad_fun(init['params']))
-        end = perf_counter() - start
-        grad_times = grad_times.at[k].set(end)
+    grad_mem = memory_usage((grad_fun, (init['params'], )))
+    start = perf_counter()
+    jax.block_until_ready(grad_fun(init['params']))
+    grad_time = perf_counter() - start
 
-    hvp_mean = hvp_times.mean()
-    hvp_std = hvp_times.std()
-    grad_mean = grad_times.mean()
-    grad_std = grad_times.std()
     return dict(
-        depth=float(2+3*(3+8+size+3)), hvp_mean_time=float(hvp_mean),
-        hvp_std_time=float(hvp_std),
-        grad_mean_time=float(grad_mean), grad_std_time=float(grad_std),
+        depth=float(2+3*(3+8+size+3)),
+        hvp_time=hvp_time,
+        hvp_mem=hvp_mem,
+        grad_time=grad_time,
+        grad_mem=grad_mem,
+        rep=float(rep),
     )
 
 
@@ -92,17 +95,30 @@ def init_model(size):
     return model
 
 
-def run_bench(sizes, batch_size=16, n_reps=10, num_classes=1000, n_jobs=1):
-    run = partial(run_one, n_reps=n_reps, batch_size=batch_size,
+def run_bench(sizes, reps, batch_size=16, num_classes=1000):
+    run = partial(run_one, batch_size=batch_size,
                   num_classes=num_classes)
 
-    res = Parallel(n_jobs=n_jobs)(
-        delayed(run)(size) for size in tqdm.tqdm(sizes)
-    )
-    all_results = []
-    for r in res:
-        all_results.append(r)
-    return pd.DataFrame(all_results)
+    with open('config/slurm_margaret.yml', "r") as f:
+        config = yaml.safe_load(f)
+
+    executor = submitit.AutoExecutor("bench_hvp")
+    executor.update_parameters(**config)
+
+    with executor.batch():
+        jobs = [executor.submit(run, size, rep)
+                for size, rep in itertools.product(sizes, reps)]
+    print(f"First job ID: {jobs[0].job_id}")
+
+    for t in progress.track(as_completed(jobs), total=len(jobs)):
+        exc = t.exception()
+        if exc is not None:
+            for tt in jobs:
+                tt.cancel()
+            raise exc
+
+    results = [t.result() for t in jobs]
+    return pd.DataFrame(results)
 
 
 if __name__ == '__main__':
@@ -127,5 +143,7 @@ if __name__ == '__main__':
     n_jobs = args.n_jobs
 
     SIZES = jnp.arange(5, 50, 5)
-    df = run_bench(SIZES, batch_size=batch_size, n_reps=n_reps, n_jobs=n_jobs)
+    N_REPS = 10
+    reps = jnp.arange(N_REPS)
+    df = run_bench(SIZES, reps, batch_size=batch_size)
     df.to_parquet('../outputs/bench_hvp.parquet')
