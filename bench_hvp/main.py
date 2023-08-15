@@ -80,7 +80,7 @@ def init_model(size):
     return model
 
 
-def run_bench(fun_dicts, sizes, reps, batch_size=16, num_classes=1000):
+def run_bench(fun_list, sizes, reps, batch_size=16, num_classes=1000):
     run = partial(run_one, batch_size=batch_size,
                   num_classes=num_classes)
 
@@ -96,7 +96,7 @@ def run_bench(fun_dicts, sizes, reps, batch_size=16, num_classes=1000):
                                 fun_dict['label'],
                                 size,
                                 rep)
-                for fun_dict, size, rep in itertools.product(fun_dicts,
+                for fun_dict, size, rep in itertools.product(fun_list,
                                                              sizes,
                                                              reps)]
     print(f"First job ID: {jobs[0].job_id}")
@@ -228,16 +228,16 @@ def grad(params, model, batch, batch_stats):
 
 
 if __name__ == '__main__':
-    fun_dicts = dict(
-        grad=dict(fun=grad, label="Gradient"),
-        hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
-        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
-                                      label="HVP forward-over-reverse"),
-        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
-                                      label="HVP reverse-over-forward"),
-        hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
-                                      label="HVP reverse-over-reverse"),
-    )
+    fun_list = [
+        dict(fun=grad, label="Gradient"),
+        dict(fun=hvp_naive, label="HVP naive"),
+        dict(fun=hvp_forward_over_reverse,
+             label="HVP forward-over-reverse"),
+        dict(fun=hvp_reverse_over_forward,
+             label="HVP reverse-over-forward"),
+        dict(fun=hvp_reverse_over_reverse,
+             label="HVP reverse-over-reverse"),
+    ]
     reps = jnp.arange(N_REPS)
-    df = run_bench(fun_dicts, SIZES, reps, batch_size=BATCH_SIZE)
+    df = run_bench(fun_list, SIZES, reps, batch_size=BATCH_SIZE)
     df.to_parquet('../outputs/bench_hvp.parquet')
