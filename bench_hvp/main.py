@@ -69,12 +69,12 @@ def run_one(size, rep, batch_size=16, num_classes=1000):
     v = grad_fun(init['params'])  # First run to get a v and for compilation
     hvp_fun(init['params'], v)  # First run for compilation
 
-    hvp_mem = memory_usage((hvp_fun, (init['params'], v)))
+    hvp_mem = max(memory_usage((hvp_fun, (init['params'], v))))
     start = perf_counter()
     jax.block_until_ready(hvp_fun(init['params'], v))
     hvp_time = perf_counter() - start
 
-    grad_mem = memory_usage((grad_fun, (init['params'], )))
+    grad_mem = max(memory_usage((grad_fun, (init['params'], ))))
     start = perf_counter()
     jax.block_until_ready(grad_fun(init['params']))
     grad_time = perf_counter() - start
@@ -122,28 +122,10 @@ def run_bench(sizes, reps, batch_size=16, num_classes=1000):
 
 
 if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser(
-        description='Benchmark for logreg hyperparameter selection.'
-    )
-
-    parser.add_argument('--n-jobs', '-j', type=int, default=1,
-                        help='# of parallel runs.')
-
-    parser.add_argument('--n-reps', '-r', type=int, default=1,
-                        help='# of repetitions.')
-
-    parser.add_argument('--batch-size', '-b', type=int, default=16,
-                        help='Batch size.')
-
-    args = parser.parse_args()
-
-    n_reps = args.n_reps
-    batch_size = args.batch_size
-    n_jobs = args.n_jobs
-
     SIZES = jnp.arange(5, 50, 5)
     N_REPS = 10
+    BATCH_SIZE = 16
+
     reps = jnp.arange(N_REPS)
-    df = run_bench(SIZES, reps, batch_size=batch_size)
+    df = run_bench(SIZES, reps, batch_size=BATCH_SIZE)
     df.to_parquet('../outputs/bench_hvp.parquet')
