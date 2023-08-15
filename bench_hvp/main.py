@@ -123,7 +123,7 @@ def hvp_naive(params, model, batch, batch_stats):
         lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
     )
     hvp_fun = jax.jit(
-        lambda x, v: jax.hessian(loss_fn, params, model, batch_stats).dot(v)
+        lambda x, v: jax.hessian(loss_fn)(params, model, batch_stats).dot(v)
     )
 
     v = grad_fun(params)  # First run to get a v and for compilation
