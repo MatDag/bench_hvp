@@ -22,6 +22,9 @@ from joblib import Memory
 mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
+SIZES = jnp.arange(5, 50, 5)
+N_REPS = 10
+BATCH_SIZE = 16
 
 
 def cross_entropy_loss(logits, labels):
@@ -49,7 +52,7 @@ def loss_fn(params, model, batch, batch_stats):
 
 
 @mem.cache
-def run_one(size, rep, batch_size=16, num_classes=1000):
+def run_one(fun, label, size, rep, batch_size=16, num_classes=NUM_CLASSES):
     key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
     batch = {
@@ -60,31 +63,13 @@ def run_one(size, rep, batch_size=16, num_classes=1000):
     key, subkey = jax.random.split(key)
     model = init_model(size)(num_classes=num_classes)
     init = model.init(key, batch['images'], train=True)
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, init['batch_stats'])
-    )
-    hvp_fun = jax.jit(
-        lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
-    )
-    v = grad_fun(init['params'])  # First run to get a v and for compilation
-    hvp_fun(init['params'], v)  # First run for compilation
-
-    hvp_mem = max(memory_usage((hvp_fun, (init['params'], v))))
-    start = perf_counter()
-    jax.block_until_ready(hvp_fun(init['params'], v))
-    hvp_time = perf_counter() - start
-
-    grad_mem = max(memory_usage((grad_fun, (init['params'], ))))
-    start = perf_counter()
-    jax.block_until_ready(grad_fun(init['params']))
-    grad_time = perf_counter() - start
+    memory, time = fun(init['params'], model, batch, init['batch_stats'])
 
     return dict(
         depth=float(2+3*(3+8+size+3)),
-        hvp_time=hvp_time,
-        hvp_mem=hvp_mem,
-        grad_time=grad_time,
-        grad_mem=grad_mem,
+        label=label,
+        time=time,
+        memory=memory,
         rep=float(rep),
     )
 
@@ -95,19 +80,25 @@ def init_model(size):
     return model
 
 
-def run_bench(sizes, reps, batch_size=16, num_classes=1000):
+def run_bench(fun_dicts, sizes, reps, batch_size=16, num_classes=1000):
     run = partial(run_one, batch_size=batch_size,
                   num_classes=num_classes)
 
-    with open('config/slurm_margaret.yml', "r") as f:
+    with open('config/slurm.yml', "r") as f:
         config = yaml.safe_load(f)
 
     executor = submitit.AutoExecutor("bench_hvp")
     executor.update_parameters(**config)
 
     with executor.batch():
-        jobs = [executor.submit(run, size, rep)
-                for size, rep in itertools.product(sizes, reps)]
+        jobs = [executor.submit(run,
+                                fun_dict['fun'],
+                                fun_dict['label'],
+                                size,
+                                rep)
+                for fun_dict, size, rep in itertools.product(fun_dicts,
+                                                             sizes,
+                                                             reps)]
     print(f"First job ID: {jobs[0].job_id}")
 
     for t in progress.track(as_completed(jobs), total=len(jobs)):
@@ -121,11 +112,132 @@ def run_bench(sizes, reps, batch_size=16, num_classes=1000):
     return pd.DataFrame(results)
 
 
-if __name__ == '__main__':
-    SIZES = jnp.arange(5, 50, 5)
-    N_REPS = 10
-    BATCH_SIZE = 16
+def hvp_naive(params, model, batch, batch_stats):
+    """
+    Returns the memory footprint and the time taken to compute the
+    Hessian-vector product by computing the full Hessian matrix and then
+    multiplying by the tangent vector v.
+    """
 
+    grad_fun = jax.jit(
+        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+    )
+    hvp_fun = jax.jit(
+        lambda x, v: jax.hessian(loss_fn, params, model, batch_stats).dot(v)
+    )
+
+    v = grad_fun(params)  # First run to get a v and for compilation
+    hvp_fun(params, v)  # First run for compilation
+
+    memory = max(memory_usage((hvp_fun, (params, v))))
+    start = perf_counter()
+    jax.block_until_ready(hvp_fun(params, v))
+    time = perf_counter() - start
+
+    start = perf_counter()
+    jax.block_until_ready(grad_fun(params))
+    grad_time = perf_counter() - start
+    return memory, time - grad_time
+
+
+def hvp_forward_over_reverse(params, model, batch, batch_stats):
+    """
+    Returns the memory footprint and the time taken to compute the
+    Hessian-vector product by forward-over-reverse propagation.
+    """
+    grad_fun = jax.jit(
+        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+    )
+    hvp_fun = jax.jit(
+        lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
+    )
+    v = grad_fun(params)  # First run to get a v and for compilation
+    hvp_fun(params, v)  # First run for compilation
+
+    memory = max(memory_usage((hvp_fun, (params, v))))
+    start = perf_counter()
+    jax.block_until_ready(hvp_fun(params, v))
+    time = perf_counter() - start
+
+    start = perf_counter()
+    jax.block_until_ready(grad_fun(params))
+    grad_time = perf_counter() - start
+    return memory, time - grad_time
+
+
+def hvp_reverse_over_forward(params, model, batch, batch_stats):
+    """
+    Returns the memory footprint and the time taken to compute the
+    Hessian-vector product by reverse-over-forward propagation.
+    """
+    grad_fun = jax.jit(
+        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+    )
+    hvp_fun = jax.jit(
+        lambda x, v: jax.vjp(grad_fun, x)[1](v)
+    )
+    v = grad_fun(params)  # First run to get a v and for compilation
+    hvp_fun(params, v)  # First run for compilation
+
+    memory = max(memory_usage((hvp_fun, (params, v))))
+    start = perf_counter()
+    jax.block_until_ready(hvp_fun(params, v))
+    time = perf_counter() - start
+    return memory, time
+
+
+def hvp_reverse_over_reverse(params, model, batch, batch_stats):
+    """
+    Returns the memory footprint and the time taken to compute the
+    Hessian-vector product by reverse-over-reverse propagation.
+    """
+    grad_fun = jax.jit(
+        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+    )
+    hvp_fun = jax.jit(
+        lambda x, v: jax.grad(lambda x: jnp.vdot(grad_fun(x), v))(x)
+    )
+    v = grad_fun(params)  # First run to get a v and for compilation
+    hvp_fun(params, v)  # First run for compilation
+
+    memory = max(memory_usage((hvp_fun, (params, v))))
+    start = perf_counter()
+    jax.block_until_ready(hvp_fun(params, v))
+    time = perf_counter() - start
+
+    start = perf_counter()
+    jax.block_until_ready(grad_fun(params))
+    grad_time = perf_counter() - start
+    return memory, time - grad_time
+
+
+def grad(params, model, batch, batch_stats):
+    """
+    Returns the memory footprint and the time taken to compute the gradient.
+    """
+    grad_fun = jax.jit(
+        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+    )
+    grad_fun(params)  # First run for compilation
+
+    memory = max(memory_usage((grad_fun, (params, ))))
+    start = perf_counter()
+    jax.block_until_ready(grad_fun(params))
+    time = perf_counter() - start
+    return memory, time
+
+
+if __name__ == '__main__':
+    fun_dicts = dict(
+        grad=dict(fun=grad, label="Gradient"),
+        hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
+        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
+                                      label="HVP forward-over-reverse"),
+        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
+                                      label="HVP reverse-over-forward"),
+        hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
+                                      label="HVP reverse-over-reverse"),
+    )
     reps = jnp.arange(N_REPS)
-    df = run_bench(SIZES, reps, batch_size=BATCH_SIZE)
+    df = run_bench(fun_dicts, SIZES, reps, batch_size=BATCH_SIZE)
     df.to_parquet('../outputs/bench_hvp.parquet')
