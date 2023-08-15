@@ -52,7 +52,7 @@ def loss_fn(params, model, batch, batch_stats):
 
 
 @mem.cache
-def run_one(fun, label, size, rep, batch_size=16, num_classes=NUM_CLASSES):
+def run_one(fun_name, size, rep, batch_size=16, num_classes=NUM_CLASSES):
     key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
     batch = {
@@ -63,11 +63,12 @@ def run_one(fun, label, size, rep, batch_size=16, num_classes=NUM_CLASSES):
     key, subkey = jax.random.split(key)
     model = init_model(size)(num_classes=num_classes)
     init = model.init(key, batch['images'], train=True)
+    fun = fun_dict[fun_name]['fun']
     memory, time = fun(init['params'], model, batch, init['batch_stats'])
 
     return dict(
         depth=float(2+3*(3+8+size+3)),
-        label=label,
+        label=fun_dict[fun_name]['label'],
         time=time,
         memory=memory,
         rep=float(rep),
@@ -92,11 +93,10 @@ def run_bench(fun_list, sizes, reps, batch_size=16, num_classes=1000):
 
     with executor.batch():
         jobs = [executor.submit(run,
-                                fun_dict['fun'],
-                                fun_dict['label'],
+                                fun_name,
                                 size,
                                 rep)
-                for fun_dict, size, rep in itertools.product(fun_list,
+                for fun_name, size, rep in itertools.product(fun_list,
                                                              sizes,
                                                              reps)]
     print(f"First job ID: {jobs[0].job_id}")
@@ -228,16 +228,17 @@ def grad(params, model, batch, batch_stats):
 
 
 if __name__ == '__main__':
-    fun_list = [
-        dict(fun=grad, label="Gradient"),
-        dict(fun=hvp_naive, label="HVP naive"),
-        dict(fun=hvp_forward_over_reverse,
-             label="HVP forward-over-reverse"),
-        dict(fun=hvp_reverse_over_forward,
-             label="HVP reverse-over-forward"),
-        dict(fun=hvp_reverse_over_reverse,
-             label="HVP reverse-over-reverse"),
-    ]
+    fun_dict = dict(
+        grad=dict(fun=grad, label="Gradient"),
+        hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
+        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
+                                      label="HVP forward-over-reverse"),
+        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
+                                      label="HVP reverse-over-forward"),
+        hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
+                                      label="HVP reverse-over-reverse"),
+    )
+    fun_list = fun_dict.keys()
     reps = jnp.arange(N_REPS)
     df = run_bench(fun_list, SIZES, reps, batch_size=BATCH_SIZE)
     df.to_parquet('../outputs/bench_hvp.parquet')
