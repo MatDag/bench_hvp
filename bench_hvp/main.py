@@ -18,6 +18,8 @@ import itertools
 from rich import progress
 from submitit.helpers import as_completed
 
+import utils
+
 from joblib import Memory
 mem = Memory(location='__cache__')
 
@@ -123,7 +125,10 @@ def hvp_naive(params, model, batch, batch_stats):
         lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
     )
     hvp_fun = jax.jit(
-        lambda x, v: jax.hessian(loss_fn)(params, model, batch_stats).dot(v)
+        lambda x, v: jax.tree_map(jnp.dot,
+                                  jax.hessian(loss_fn)(x, model,
+                                                       batch, batch_stats),
+                                  v)
     )
 
     v = grad_fun(params)  # First run to get a v and for compilation
@@ -183,7 +188,11 @@ def hvp_reverse_over_forward(params, model, batch, batch_stats):
     start = perf_counter()
     jax.block_until_ready(hvp_fun(params, v))
     time = perf_counter() - start
-    return memory, time
+
+    start = perf_counter()
+    jax.block_until_ready(grad_fun(params))
+    grad_time = perf_counter() - start
+    return memory, time - grad_time
 
 
 def hvp_reverse_over_reverse(params, model, batch, batch_stats):
@@ -191,11 +200,12 @@ def hvp_reverse_over_reverse(params, model, batch, batch_stats):
     Returns the memory footprint and the time taken to compute the
     Hessian-vector product by reverse-over-reverse propagation.
     """
+
     grad_fun = jax.jit(
         lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
     )
     hvp_fun = jax.jit(
-        lambda x, v: jax.grad(lambda x: jnp.vdot(grad_fun(x), v))(x)
+        lambda x, v: jax.grad(lambda x: utils.tree_dot(grad_fun(x), v))(x)
     )
     v = grad_fun(params)  # First run to get a v and for compilation
     hvp_fun(params, v)  # First run for compilation
@@ -230,7 +240,7 @@ def grad(params, model, batch, batch_stats):
 if __name__ == '__main__':
     fun_dict = dict(
         grad=dict(fun=grad, label="Gradient"),
-        hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
+        # hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
         hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
                                       label="HVP forward-over-reverse"),
         hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,

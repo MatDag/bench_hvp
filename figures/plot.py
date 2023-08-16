@@ -1,58 +1,70 @@
-import matplotlib.pyplot as plt
 import pandas as pd
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 LEGEND_RATIO = 0.1
-DEFAULT_WIDTH = 3.25
+DEFAULT_WIDTH = 6
 DEFAULT_DOUBLE_WIDTH = 6.75
-DEFAULT_HEIGHT = 2.
+DEFAULT_HEIGHT = 3.
 
-METRIC_LIST = ["Time", "Mem"]
-
-ORACLES = dict(
-    hvp="HVP and grad",
-    grad="Grad only",
-    hvp_minus_grad="HVP only",
+METRICS = dict(
+    time="Time [sec]",
+    memory="Memory [MB]"
 )
 
+STYLES = {
+    'Gradient': '#5778a4',
+    'HVP forward-over-reverse': '#e49444',
+    'HVP reverse-over-forward': '#e7ca60',
+    'HVP reverse-over-reverse': '#d1615d',
+}
+
+mpl.rcParams.update({
+    'font.size': 10,
+    'legend.fontsize': 'small',
+    'axes.labelsize': 'small',
+    'xtick.labelsize': 'small',
+    'ytick.labelsize': 'small'
+})
+
 df = pd.read_parquet('../outputs/bench_hvp.parquet')
-
-df['hvp_minus_grad_time'] = df['hvp_time'] - df['grad_time']
-df['hvp_minus_grad_mem'] = df['hvp_mem'] - df['grad_mem']
-
 
 fig = plt.figure(
     figsize=(DEFAULT_WIDTH, DEFAULT_HEIGHT * (1 + LEGEND_RATIO))
 )
-gs = plt.GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[.1, 1])
-axes = [fig.add_subplot(gs[1, i]) for i in range(2)]
+gs = plt.GridSpec(2, 3, width_ratios=[1, .1, 1], height_ratios=[.1, 1])
+axes = [fig.add_subplot(gs[1, i]) for i in [0, 2]]
 
-for ax, metric in zip(axes, METRIC_LIST):
+for ax, metric in zip(axes, METRICS):
     lines = []
 
-    curves = (
-        df.groupby(["depth"])
-        .quantile([0.2, 0.5, 0.8], numeric_only=True)[
-            ["hvp_" + metric.lower(),
-             "grad_" + metric.lower(),
-             "hvp_minus_grad_" + metric.lower()]
-        ]
-        .reset_index().set_index(['level_1']).sort_values('depth')
-    )
-
-    for oracle in ORACLES:
-        y = f"{oracle}_{metric.lower()}"
+    for label in df['label'].unique():
+        to_plot = (
+            df.query("label == @label")
+            .groupby(['depth'])
+            .quantile([0.2, 0.5, 0.8], numeric_only=True)
+            .unstack()
+        )
         lines.append(
-            curves.loc[0.5].plot(
-                x="depth", y=y, ax=ax,
-                label=ORACLES[oracle]
-            )
+            ax.plot(
+                to_plot.index,
+                to_plot.loc[:, (metric.lower(), 0.5)],
+                color=STYLES[label],
+                label=label
+            )[0]
         )
         ax.fill_between(
-            curves.loc[0.5]["depth"],
-            curves.loc[0.2][y],
-            curves.loc[0.8][y],
-            alpha=0.3
+            to_plot.index,
+            to_plot.loc[:, (metric.lower(), 0.2)],
+            to_plot.loc[:, (metric.lower(), 0.8)],
+            alpha=0.3,
+            color=STYLES[label]
         )
+    ax.set_xlabel('Depth')
+    ax.set_ylabel(METRICS[metric])
 
+ax_legend = fig.add_subplot(gs[0, :])
+ax_legend.set_axis_off()
+ax_legend.legend(handles=lines, loc='center', ncol=2)
 
 plt.savefig('bench_hvp_test.pdf', dpi=300)
