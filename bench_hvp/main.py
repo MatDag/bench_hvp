@@ -84,7 +84,7 @@ def run_bench(fun_list, sizes, reps, batch_size=16, num_classes=1000):
     run = partial(run_one, batch_size=batch_size,
                   num_classes=num_classes)
 
-    with open('config/slurm.yml', "r") as f:
+    with open('config/slurm_margaret.yml', "r") as f:
         config = yaml.safe_load(f)
 
     executor = submitit.AutoExecutor("bench_hvp")
@@ -172,8 +172,11 @@ def hvp_reverse_over_forward(params, model, batch, batch_stats):
     grad_fun = jax.jit(
         lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
     )
+    jvp_fun = jax.jit(
+        lambda x, v: jax.jvp(loss_fn, (x, model, batch, batch_stats), (v, ))[1]
+    )
     hvp_fun = jax.jit(
-        lambda x, v: jax.vjp(grad_fun, x)[1](v)
+        lambda x, v: jax.grad(jvp_fun)(x, v)
     )
     v = grad_fun(params)  # First run to get a v and for compilation
     hvp_fun(params, v)  # First run for compilation
