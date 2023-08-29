@@ -10,8 +10,6 @@ from functools import partial
 
 from time import perf_counter
 
-from memory_profiler import memory_usage
-
 import yaml
 import submitit
 import itertools
@@ -66,13 +64,12 @@ def run_one(fun_name, size, rep, batch_size=16, num_classes=NUM_CLASSES):
     model = init_model(size)(num_classes=num_classes)
     init = model.init(key, batch['images'], train=True)
     fun = fun_dict[fun_name]['fun']
-    memory, time = fun(init['params'], model, batch, init['batch_stats'])
+    time = fun(init['params'], model, batch, init['batch_stats'])
 
     return dict(
         depth=float(2+3*(3+8+size+3)),
         label=fun_dict[fun_name]['label'],
         time=time,
-        memory=memory,
         rep=float(rep),
     )
 
@@ -116,9 +113,8 @@ def run_bench(fun_list, sizes, reps, batch_size=16, num_classes=1000):
 
 def hvp_naive(params, model, batch, batch_stats):
     """
-    Returns the memory footprint and the time taken to compute the
-    Hessian-vector product by computing the full Hessian matrix and then
-    multiplying by the tangent vector v.
+    Returns the time taken to compute the Hessian-vector product by computing
+    the full Hessian matrix and then multiplying by the tangent vector v.
     """
 
     grad_fun = jax.jit(
@@ -134,7 +130,6 @@ def hvp_naive(params, model, batch, batch_stats):
     v = grad_fun(params)  # First run to get a v and for compilation
     hvp_fun(params, v)  # First run for compilation
 
-    memory = max(memory_usage((hvp_fun, (params, v))))
     start = perf_counter()
     jax.block_until_ready(hvp_fun(params, v))
     time = perf_counter() - start
@@ -142,13 +137,13 @@ def hvp_naive(params, model, batch, batch_stats):
     start = perf_counter()
     jax.block_until_ready(grad_fun(params))
     grad_time = perf_counter() - start
-    return memory, time - grad_time
+    return time - grad_time
 
 
 def hvp_forward_over_reverse(params, model, batch, batch_stats):
     """
-    Returns the memory footprint and the time taken to compute the
-    Hessian-vector product by forward-over-reverse propagation.
+    Returns the time taken to compute the Hessian-vector product by
+    forward-over-reverse propagation.
     """
     grad_fun = jax.jit(
         lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
@@ -159,7 +154,6 @@ def hvp_forward_over_reverse(params, model, batch, batch_stats):
     v = grad_fun(params)  # First run to get a v and for compilation
     hvp_fun(params, v)  # First run for compilation
 
-    memory = max(memory_usage((hvp_fun, (params, v))))
     start = perf_counter()
     jax.block_until_ready(hvp_fun(params, v))
     time = perf_counter() - start
@@ -167,12 +161,12 @@ def hvp_forward_over_reverse(params, model, batch, batch_stats):
     start = perf_counter()
     jax.block_until_ready(grad_fun(params))
     grad_time = perf_counter() - start
-    return memory, time - grad_time
+    return time - grad_time
 
 
 def hvp_reverse_over_forward(params, model, batch, batch_stats):
     """
-    Returns the memory footprint and the time taken to compute the
+    Returns the time taken to compute the
     Hessian-vector product by reverse-over-forward propagation.
     """
     grad_fun = jax.jit(
@@ -184,7 +178,6 @@ def hvp_reverse_over_forward(params, model, batch, batch_stats):
     v = grad_fun(params)  # First run to get a v and for compilation
     hvp_fun(params, v)  # First run for compilation
 
-    memory = max(memory_usage((hvp_fun, (params, v))))
     start = perf_counter()
     jax.block_until_ready(hvp_fun(params, v))
     time = perf_counter() - start
@@ -192,13 +185,13 @@ def hvp_reverse_over_forward(params, model, batch, batch_stats):
     start = perf_counter()
     jax.block_until_ready(grad_fun(params))
     grad_time = perf_counter() - start
-    return memory, time - grad_time
+    return time - grad_time
 
 
 def hvp_reverse_over_reverse(params, model, batch, batch_stats):
     """
-    Returns the memory footprint and the time taken to compute the
-    Hessian-vector product by reverse-over-reverse propagation.
+    Returns the time taken to compute the Hessian-vector product by
+    reverse-over-reverse propagation.
     """
 
     grad_fun = jax.jit(
@@ -210,7 +203,6 @@ def hvp_reverse_over_reverse(params, model, batch, batch_stats):
     v = grad_fun(params)  # First run to get a v and for compilation
     hvp_fun(params, v)  # First run for compilation
 
-    memory = max(memory_usage((hvp_fun, (params, v))))
     start = perf_counter()
     jax.block_until_ready(hvp_fun(params, v))
     time = perf_counter() - start
@@ -218,23 +210,22 @@ def hvp_reverse_over_reverse(params, model, batch, batch_stats):
     start = perf_counter()
     jax.block_until_ready(grad_fun(params))
     grad_time = perf_counter() - start
-    return memory, time - grad_time
+    return time - grad_time
 
 
 def grad(params, model, batch, batch_stats):
     """
-    Returns the memory footprint and the time taken to compute the gradient.
+    Returns the time taken to compute the gradient.
     """
     grad_fun = jax.jit(
         lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
     )
     grad_fun(params)  # First run for compilation
 
-    memory = max(memory_usage((grad_fun, (params, ))))
     start = perf_counter()
     jax.block_until_ready(grad_fun(params))
     time = perf_counter() - start
-    return memory, time
+    return time
 
 
 if __name__ == '__main__':
