@@ -27,7 +27,7 @@ df = pd.read_parquet('../outputs/bench_hvp.parquet')
 fig = plt.figure(
     figsize=(DEFAULT_WIDTH, DEFAULT_HEIGHT)
 )
-gs = plt.GridSpec(1, 2, width_ratios=[.6, .4], hspace=0)
+gs = plt.GridSpec(1, 2, width_ratios=[.6, .4], hspace=0, bottom=.1)
 ax = fig.add_subplot(gs[0, 0])
 
 lines = []
