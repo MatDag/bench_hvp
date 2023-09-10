@@ -22,15 +22,15 @@ from joblib import Memory
 mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
-N_REPS = 10
-BATCH_SIZE_LIST = [16, 64]
+N_REPS = 100
+BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
     resnet18=ResNet18,
     resnet34=ResNet34,
-    # resnet50=ResNet50,
-    # resnet101=ResNet101,
-    # resnet152=ResNet152,
-    # resnet200=ResNet200,
+    resnet50=ResNet50,
+    resnet101=ResNet101,
+    resnet152=ResNet152,
+    resnet200=ResNet200,
 )
 SLURM_CONFIG = 'config/slurm_margaret.yml'
 
@@ -218,10 +218,10 @@ if __name__ == '__main__':
     fun_dict = dict(
         grad=dict(fun=None, label="Gradient"),
         # hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
-        # hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
-                                    #   label="HVP forward-over-reverse"),
-        # hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
-                                    #   label="HVP reverse-over-forward"),
+        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
+                                      label="HVP forward-over-reverse"),
+        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
+                                      label="HVP reverse-over-forward"),
         hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
                                       label="HVP reverse-over-reverse"),
     )
