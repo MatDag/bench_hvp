@@ -1,9 +1,9 @@
-from models import ResNet, BottleneckResNetBlock
-
 import jax
 import optax
 import jax.numpy as jnp
 from flax.training import common_utils
+from models import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+from models import ResNet200
 
 import pandas as pd
 from functools import partial
@@ -22,9 +22,17 @@ from joblib import Memory
 mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
-SIZES = jnp.arange(5, 50, 5)
-N_REPS = 10
-BATCH_SIZE = 16
+N_REPS = 2
+BATCH_SIZE_LIST = [16, 64]
+MODEL_DICT = dict(
+    resnet18=ResNet18,
+    resnet34=ResNet34,
+    # resnet50=ResNet50,
+    # resnet101=ResNet101,
+    # resnet152=ResNet152,
+    # resnet200=ResNet200,
+)
+SLURM_CONFIG = 'config/slurm_margaret.yml'
 
 
 def cross_entropy_loss(logits, labels):
@@ -52,7 +60,8 @@ def loss_fn(params, model, batch, batch_stats):
 
 
 @mem.cache
-def run_one(fun_name, size, rep, batch_size=16, num_classes=NUM_CLASSES):
+def run_one(fun_name, model_name, batch_size=16, n_reps=1,
+            num_classes=NUM_CLASSES):
     key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
     batch = {
@@ -61,43 +70,62 @@ def run_one(fun_name, size, rep, batch_size=16, num_classes=NUM_CLASSES):
     }
 
     key, subkey = jax.random.split(key)
-    model = init_model(size)(num_classes=num_classes)
+    model = MODEL_DICT[model_name](num_classes=num_classes)
     init = model.init(key, batch['images'], train=True)
-    fun = fun_dict[fun_name]['fun']
-    time = fun(init['params'], model, batch, init['batch_stats'])
+    params, batch_stats = init['params'], init['batch_stats']
+    grad_fun = jax.jit(
+        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+    )
+
+    if fun_name == "grad":
+        grad_fun(params)  # First run for compilation
+    else:
+        v = grad_fun(params)  # First run to get a v and for compilation
+        hvp_fun = fun_dict[fun_name]['fun'](model, batch, batch_stats)
+        hvp_fun(params, v)  # First run for compilation
+    times = []
+    for _ in range(n_reps):
+        if fun_name == "grad":
+            start = perf_counter()
+            jax.block_until_ready(grad_fun(params, v))
+            time = perf_counter() - start
+            times.append(time)
+        else:
+            start = perf_counter()
+            jax.block_until_ready(hvp_fun(params, v))
+            time = perf_counter() - start
+            start = perf_counter()
+            jax.block_until_ready(grad_fun(params))
+            grad_time = perf_counter() - start
+            times.append(time - grad_time)
 
     return dict(
-        depth=float(2+3*(3+8+size+3)),
-        label=fun_dict[fun_name]['label'],
-        time=time,
-        rep=float(rep),
+        model=model_name,
+        label=fun_name,
+        time=times,
+        rep=jnp.arange(n_reps),
     )
 
 
-def init_model(size):
-    model = partial(ResNet, stage_sizes=[3, 8, size, 3],
-                    block_cls=BottleneckResNetBlock)
-    return model
+def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
+              slurm_config_path=None):
+    run = partial(run_one, num_classes=num_classes, n_reps=n_reps)
 
-
-def run_bench(fun_list, sizes, reps, batch_size=16, num_classes=1000):
-    run = partial(run_one, batch_size=batch_size,
-                  num_classes=num_classes)
-
-    with open('config/slurm.yml', "r") as f:
+    with open(slurm_config_path, "r") as f:
         config = yaml.safe_load(f)
 
     executor = submitit.AutoExecutor("bench_hvp")
     executor.update_parameters(**config)
 
     with executor.batch():
-        jobs = [executor.submit(run,
-                                fun_name,
-                                size,
-                                rep)
-                for fun_name, size, rep in itertools.product(fun_list,
-                                                             sizes,
-                                                             reps)]
+        jobs = [
+            executor.submit(run,
+                            fun_name,
+                            model_name,
+                            batch_size)
+            for fun_name, model_name, batch_size
+            in itertools.product(fun_list, model_list, batch_size_list)
+        ]
     print(f"First job ID: {jobs[0].job_id}")
 
     for t in progress.track(as_completed(jobs), total=len(jobs)):
@@ -108,7 +136,7 @@ def run_bench(fun_list, sizes, reps, batch_size=16, num_classes=1000):
             raise exc
 
     results = [t.result() for t in jobs]
-    return pd.DataFrame(results)
+    return pd.concat([pd.DataFrame(res) for res in results])
 
 
 def hvp_naive(params, model, batch, batch_stats):
@@ -140,7 +168,7 @@ def hvp_naive(params, model, batch, batch_stats):
     return time - grad_time
 
 
-def hvp_forward_over_reverse(params, model, batch, batch_stats):
+def hvp_forward_over_reverse(model, batch, batch_stats):
     """
     Returns the time taken to compute the Hessian-vector product by
     forward-over-reverse propagation.
@@ -151,27 +179,14 @@ def hvp_forward_over_reverse(params, model, batch, batch_stats):
     hvp_fun = jax.jit(
         lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
     )
-    v = grad_fun(params)  # First run to get a v and for compilation
-    hvp_fun(params, v)  # First run for compilation
-
-    start = perf_counter()
-    jax.block_until_ready(hvp_fun(params, v))
-    time = perf_counter() - start
-
-    start = perf_counter()
-    jax.block_until_ready(grad_fun(params))
-    grad_time = perf_counter() - start
-    return time - grad_time
+    return hvp_fun
 
 
-def hvp_reverse_over_forward(params, model, batch, batch_stats):
+def hvp_reverse_over_forward(model, batch, batch_stats):
     """
     Returns the time taken to compute the
     Hessian-vector product by reverse-over-forward propagation.
     """
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
-    )
     jvp_fun = jax.jit(
         lambda x, v: jax.jvp(
             lambda y: loss_fn(y, model, batch, batch_stats), (x, ), (v, )
@@ -180,20 +195,11 @@ def hvp_reverse_over_forward(params, model, batch, batch_stats):
     hvp_fun = jax.jit(
         lambda x, v: jax.grad(jvp_fun)(x, v)
     )
-    v = grad_fun(params)  # First run to get a v and for compilation
-    hvp_fun(params, v)  # First run for compilation
 
-    start = perf_counter()
-    jax.block_until_ready(hvp_fun(params, v))
-    time = perf_counter() - start
-
-    start = perf_counter()
-    jax.block_until_ready(grad_fun(params))
-    grad_time = perf_counter() - start
-    return time - grad_time
+    return hvp_fun
 
 
-def hvp_reverse_over_reverse(params, model, batch, batch_stats):
+def hvp_reverse_over_reverse(model, batch, batch_stats):
     """
     Returns the time taken to compute the Hessian-vector product by
     reverse-over-reverse propagation.
@@ -205,46 +211,23 @@ def hvp_reverse_over_reverse(params, model, batch, batch_stats):
     hvp_fun = jax.jit(
         lambda x, v: jax.grad(lambda x: utils.tree_dot(grad_fun(x), v))(x)
     )
-    v = grad_fun(params)  # First run to get a v and for compilation
-    hvp_fun(params, v)  # First run for compilation
-
-    start = perf_counter()
-    jax.block_until_ready(hvp_fun(params, v))
-    time = perf_counter() - start
-
-    start = perf_counter()
-    jax.block_until_ready(grad_fun(params))
-    grad_time = perf_counter() - start
-    return time - grad_time
-
-
-def grad(params, model, batch, batch_stats):
-    """
-    Returns the time taken to compute the gradient.
-    """
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
-    )
-    grad_fun(params)  # First run for compilation
-
-    start = perf_counter()
-    jax.block_until_ready(grad_fun(params))
-    time = perf_counter() - start
-    return time
+    return hvp_fun
 
 
 if __name__ == '__main__':
     fun_dict = dict(
-        grad=dict(fun=grad, label="Gradient"),
+        grad=dict(fun=None, label="Gradient"),
         # hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
-        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
-                                      label="HVP forward-over-reverse"),
-        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
-                                      label="HVP reverse-over-forward"),
+        # hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
+                                    #   label="HVP forward-over-reverse"),
+        # hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
+                                    #   label="HVP reverse-over-forward"),
         hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
                                       label="HVP reverse-over-reverse"),
     )
+    model_list = MODEL_DICT.keys()
     fun_list = fun_dict.keys()
-    reps = jnp.arange(N_REPS)
-    df = run_bench(fun_list, SIZES, reps, batch_size=BATCH_SIZE)
+    df = run_bench(fun_list, model_list, n_reps=N_REPS,
+                   batch_size_list=BATCH_SIZE_LIST,
+                   slurm_config_path=SLURM_CONFIG)
     df.to_parquet('../outputs/bench_hvp.parquet')
