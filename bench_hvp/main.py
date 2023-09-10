@@ -32,7 +32,7 @@ MODEL_DICT = dict(
     resnet152=ResNet152,
     resnet200=ResNet200,
 )
-SLURM_CONFIG = 'config/slurm_margaret.yml'
+SLURM_CONFIG = 'config/slurm.yml'
 
 
 def cross_entropy_loss(logits, labels):
