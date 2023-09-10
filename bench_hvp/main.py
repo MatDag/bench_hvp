@@ -22,7 +22,7 @@ from joblib import Memory
 mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
-N_REPS = 2
+N_REPS = 10
 BATCH_SIZE_LIST = [16, 64]
 MODEL_DICT = dict(
     resnet18=ResNet18,
@@ -87,7 +87,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1,
     for _ in range(n_reps):
         if fun_name == "grad":
             start = perf_counter()
-            jax.block_until_ready(grad_fun(params, v))
+            jax.block_until_ready(grad_fun(params))
             time = perf_counter() - start
             times.append(time)
         else:
