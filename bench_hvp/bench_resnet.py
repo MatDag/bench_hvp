@@ -30,7 +30,7 @@ MODEL_DICT = dict(
     resnet50=ResNet50,
     resnet101=ResNet101,
     resnet152=ResNet152,
-    resnet200=ResNet200,
+    # resnet200=ResNet200,
 )
 SLURM_CONFIG = 'config/slurm.yml'
 
@@ -103,6 +103,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1,
         model=model_name,
         label=fun_name,
         time=times,
+        batch_size=batch_size,
         rep=jnp.arange(n_reps),
     )
 
@@ -230,4 +231,4 @@ if __name__ == '__main__':
     df = run_bench(fun_list, model_list, n_reps=N_REPS,
                    batch_size_list=BATCH_SIZE_LIST,
                    slurm_config_path=SLURM_CONFIG)
-    df.to_parquet('../outputs/bench_hvp.parquet')
+    df.to_parquet('../outputs/bench_resnet.parquet')

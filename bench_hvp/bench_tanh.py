@@ -17,8 +17,8 @@ from submitit.helpers import as_completed
 from joblib import Memory
 mem = Memory(location='__cache__')
 
-N_REPS = 2
-DIM_LIST = jnp.logspace(0, 5, 6, dtype=jnp.int32)
+N_REPS = 100
+DIM_LIST = jnp.logspace(0, 6, 7, dtype=jnp.int32)
 SLURM_CONFIG = 'config/slurm_cpu.yml'
 
 
@@ -46,7 +46,7 @@ def run_one(fun_name, dim=1, n_reps=1):
             jax.block_until_ready(grad_fun(x))
             time = perf_counter() - start
             times.append(time)
-            memories.append(jnp.max(memory_usage((grad_fun, (x, )))))
+            memories.append(max(memory_usage((grad_fun, (x, )))))
         else:
             start = perf_counter()
             jax.block_until_ready(hvp_fun(x, v))
@@ -55,10 +55,10 @@ def run_one(fun_name, dim=1, n_reps=1):
             jax.block_until_ready(grad_fun(x))
             grad_time = perf_counter() - start
             times.append(time - grad_time)
-            memories.append(jnp.max(memory_usage((hvp_fun, (x, v)))))
+            memories.append(max(memory_usage((hvp_fun, (x, v)))))
 
     return dict(
-        dim=dim,
+        dim=float(dim),
         label=fun_name,
         time=times,
         memory=memories,
@@ -78,6 +78,7 @@ def run_bench(fun_list, dim_list, n_reps, slurm_config_path=SLURM_CONFIG):
     with executor.batch():
         jobs = [
             executor.submit(run,
+                            fun_name,
                             dim)
             for fun_name, dim in itertools.product(fun_list, dim_list)
         ]
