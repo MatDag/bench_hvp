@@ -18,7 +18,7 @@ from joblib import Memory
 mem = Memory(location='__cache__')
 
 N_REPS = 100
-DIM_LIST = jnp.logspace(0, 6, 7, dtype=jnp.int32)
+DIM_LIST = jnp.logspace(0, 5, 6, dtype=jnp.int32)
 SLURM_CONFIG = 'config/slurm_cpu.yml'
 
 
