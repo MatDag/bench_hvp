@@ -51,10 +51,7 @@ def run_one(fun_name, dim=1, n_reps=1):
             start = perf_counter()
             jax.block_until_ready(hvp_fun(x, v))
             time = perf_counter() - start
-            start = perf_counter()
-            jax.block_until_ready(grad_fun(x))
-            grad_time = perf_counter() - start
-            times.append(time - grad_time)
+            times.append(time)
             memories.append(max(memory_usage((hvp_fun, (x, v)))))
 
     return dict(
@@ -98,8 +95,8 @@ def run_bench(fun_list, dim_list, n_reps, slurm_config_path=SLURM_CONFIG):
 @jax.jit
 def hvp_naive(x, v):
     """
-    Returns the time taken to compute the Hessian-vector product by computing
-    the full Hessian matrix and then multiplying by the tangent vector v.
+    Returns the Hessian-vector product by computing the full Hessian matrix
+    and then multiplying by the tangent vector v.
     """
 
     return jnp.dot(jax.hessian(f)(x), v)
@@ -108,8 +105,7 @@ def hvp_naive(x, v):
 @jax.jit
 def hvp_forward_over_reverse(x, v):
     """
-    Returns the time taken to compute the Hessian-vector product by
-    forward-over-reverse propagation.
+    Returns the Hessian-vector product by forward-over-reverse propagation.
     """
     return jax.jvp(jax.grad(f), (x, ), (v, ))[1]
 
@@ -117,8 +113,7 @@ def hvp_forward_over_reverse(x, v):
 @jax.jit
 def hvp_reverse_over_forward(x, v):
     """
-    Returns the time taken to compute the
-    Hessian-vector product by reverse-over-forward propagation.
+    Returns the Hessian-vector product by reverse-over-forward propagation.
     """
     def jvp_fun(x, v):
         return jax.jvp(f, (x, ), (v, ))[1]
@@ -129,8 +124,7 @@ def hvp_reverse_over_forward(x, v):
 @jax.jit
 def hvp_reverse_over_reverse(x, v):
     """
-    Returns the time taken to compute the Hessian-vector product by
-    reverse-over-reverse propagation.
+    Returns the Hessian-vector product by reverse-over-reverse propagation.
     """
     return jax.grad(lambda x: jnp.dot(jax.grad(f)(x), v))(x)
 
