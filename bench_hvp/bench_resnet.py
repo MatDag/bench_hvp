@@ -3,7 +3,6 @@ import optax
 import jax.numpy as jnp
 from flax.training import common_utils
 from models import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
-from models import ResNet200
 
 import pandas as pd
 from functools import partial
@@ -30,7 +29,6 @@ MODEL_DICT = dict(
     resnet50=ResNet50,
     resnet101=ResNet101,
     resnet152=ResNet152,
-    # resnet200=ResNet200,
 )
 SLURM_CONFIG = 'config/slurm.yml'
 
