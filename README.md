@@ -1,1 +1,1 @@
-# bench_hvp
+# Benchmark Hessian-vector product

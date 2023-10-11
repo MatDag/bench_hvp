@@ -1,0 +1,9 @@
+# slurm.yaml
+slurm_time: 01:00:00
+slurm_additional_parameters:
+  ntasks: 1                
+  qos: normal            
+  distribution: block:block
+  gres: gpu:1       
+  partition: gpu      
+  job-name: bench_hvp
