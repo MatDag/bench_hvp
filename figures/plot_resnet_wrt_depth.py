@@ -99,4 +99,4 @@ else:
     ax_legend.set_axis_off()
     ax_legend.legend(handles=lines, loc='center', ncol=1)
 
-plt.savefig('bench_hvp_resnet_wrt_depth.pdf', dpi=300)
+plt.savefig('bench_hvp_resnet_wrt_depth.png', dpi=300)

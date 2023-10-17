@@ -17,7 +17,7 @@ STYLES = dict(
                                   color='#e7ca60'),
     hvp_reverse_over_reverse=dict(label='HVP reverse-over-reverse',
                                   color='#d1615d'),
-    hvp_naive=dict(label='HVP naive', color='#5778a4')
+    # hvp_naive=dict(label='HVP naive', color='#5778a4')
 )
 
 
@@ -29,7 +29,7 @@ mpl.rcParams.update({
     'ytick.labelsize': 'small'
 })
 
-df = pd.read_parquet('../outputs/bench_tanh2.parquet')
+df = pd.read_parquet('../outputs/bench_tanh.parquet')
 
 
 fig = plt.figure(
@@ -105,4 +105,4 @@ ax_legend = fig.add_subplot(gs[0, :])
 ax_legend.set_axis_off()
 ax_legend.legend(handles=lines, loc='center', ncol=2)
 
-plt.savefig('bench_hvp_tanh.pdf', dpi=300)
+plt.savefig('bench_hvp_tanh.png', dpi=300)
