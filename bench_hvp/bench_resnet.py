@@ -125,16 +125,28 @@ def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
     times = []
     for _ in range(n_reps):
         if fun_name == "grad":
-            start = perf_counter()
-            jax.block_until_ready(grad_fun(params))
-            time = perf_counter() - start
+            if framework == 'jax':
+                start = perf_counter()
+                jax.block_until_ready(grad_fun(params))
+                time = perf_counter() - start
+            elif framework == 'torch':
+                start = perf_counter()
+                grad_fun(params)
+                time = perf_counter() - start
             times.append(time)
         else:
-            start = perf_counter()
-            jax.block_until_ready(hvp_fun(params, v))
-            time = perf_counter() - start
-            start = perf_counter()
-            jax.block_until_ready(grad_fun(params))
+            if framework == 'jax':
+                start = perf_counter()
+                jax.block_until_ready(hvp_fun(params, v))
+                time = perf_counter() - start
+                start = perf_counter()
+                jax.block_until_ready(grad_fun(params))
+            elif framework == 'torch':
+                start = perf_counter()
+                hvp_fun(params, v)
+                time = perf_counter() - start
+                start = perf_counter()
+                grad_fun(params)
             grad_time = perf_counter() - start
             times.append(time - grad_time)
 
