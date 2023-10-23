@@ -67,6 +67,7 @@ def loss_fn_jax(params, model, batch, batch_stats):
     return loss
 
 
+@torch.compile
 def loss_fn_torch(params, fun, batch):
     """loss function used for training."""
     logits = fun(params, batch['images'])
