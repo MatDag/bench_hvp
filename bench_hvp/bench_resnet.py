@@ -67,7 +67,7 @@ def loss_fn_jax(params, model, batch, batch_stats):
     return loss
 
 
-@torch.compile
+# @torch.compile
 def loss_fn_torch(params, fun, batch):
     """loss function used for training."""
     logits = fun(params, batch['images'])
@@ -157,29 +157,29 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
 
     executor = submitit.AutoExecutor("bench_hvp")
     executor.update_parameters(**config)
-    model_name_jax = [model_name for model_name in model_list
+    model_list_jax = [model_name for model_name in model_list
                       if MODEL_DICT[model_name]['framework'] == 'jax']
-    model_name_torch = [model_name for model_name in model_list
+    model_list_torch = [model_name for model_name in model_list
                         if MODEL_DICT[model_name]['framework'] == 'torch']
 
     with executor.batch():
         jobs = [
             executor.submit(run,
                             fun_name,
-                            model_name_jax,
+                            model_name,
                             'jax',
                             batch_size)
             for fun_name, model_name, batch_size
-            in itertools.product(fun_list, model_list, batch_size_list)
+            in itertools.product(fun_list, model_list_jax, batch_size_list)
         ] + [
             executor.submit(run,
                             fun_name,
-                            model_name_torch,
+                            model_name,
                             'torch',
                             batch_size)
             for fun_name, model_name, batch_size
-            in itertools.product(fun_list, model_list, batch_size_list)
-            ]
+            in itertools.product(fun_list, model_list_torch, batch_size_list)
+        ]
 
     print(f"First job ID: {jobs[0].job_id}")
 
