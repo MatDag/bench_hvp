@@ -169,28 +169,16 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
 
     executor = submitit.AutoExecutor("bench_hvp")
     executor.update_parameters(**config)
-    model_list_jax = [model_name for model_name in model_list
-                      if MODEL_DICT[model_name]['framework'] == 'jax']
-    model_list_torch = [model_name for model_name in model_list
-                        if MODEL_DICT[model_name]['framework'] == 'torch']
 
     with executor.batch():
         jobs = [
             executor.submit(run,
                             fun_name,
                             model_name,
-                            'jax',
+                            MODEL_DICT[model_name]['framework'],
                             batch_size)
             for fun_name, model_name, batch_size
-            in itertools.product(fun_list, model_list_jax, batch_size_list)
-        ] + [
-            executor.submit(run,
-                            fun_name,
-                            model_name,
-                            'torch',
-                            batch_size)
-            for fun_name, model_name, batch_size
-            in itertools.product(fun_list, model_list_torch, batch_size_list)
+            in itertools.product(fun_list, model_list, batch_size_list)
         ]
 
     print(f"First job ID: {jobs[0].job_id}")
