@@ -277,7 +277,6 @@ if __name__ == '__main__':
     )
     model_list = MODEL_DICT.keys()
     fun_list = fun_dict.keys()
-    run_one('hvp_forward_over_reverse', 'resnet18_torch', framework='torch')
     df = run_bench(fun_list, model_list, n_reps=N_REPS,
                    batch_size_list=BATCH_SIZE_LIST,
                    slurm_config_path=SLURM_CONFIG)
