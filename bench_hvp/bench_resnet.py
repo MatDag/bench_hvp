@@ -1,8 +1,13 @@
 import jax
 import optax
 import jax.numpy as jnp
+from models import resnet_flax
 from flax.training import common_utils
-from models import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+
+import torch
+import functorch
+from torchvision.models import resnet as resnet_torch
+from functorch.experimental import replace_all_batch_norm_modules_
 
 import pandas as pd
 from functools import partial
@@ -24,11 +29,16 @@ NUM_CLASSES = 1000
 N_REPS = 100
 BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
-    resnet18=ResNet18,
-    resnet34=ResNet34,
-    resnet50=ResNet50,
-    resnet101=ResNet101,
-    resnet152=ResNet152,
+    resnet18_flax=dict(model=resnet_flax.ResNet18, framework='jax'),
+    resnet34_flax=dict(model=resnet_flax.ResNet34, framework='jax'),
+    resnet50_flax=dict(model=resnet_flax.ResNet50, framework='jax'),
+    resnet101_flax=dict(model=resnet_flax.ResNet101, framework='jax'),
+    resnet152_flax=dict(model=resnet_flax.ResNet152, framework='jax'),
+    resnet18_torch=dict(model=resnet_torch.resnet18, framework='torch'),
+    resnet34_torch=dict(model=resnet_torch.resnet34, framework='torch'),
+    resnet50_torch=dict(model=resnet_torch.resnet50, framework='torch'),
+    resnet101_torch=dict(model=resnet_torch.resnet101, framework='torch'),
+    resnet152_torch=dict(model=resnet_torch.resnet152, framework='torch'),
 )
 SLURM_CONFIG = 'config/slurm.yml'
 
@@ -40,7 +50,7 @@ def cross_entropy_loss(logits, labels):
     return jnp.mean(xentropy)
 
 
-def loss_fn(params, model, batch, batch_stats):
+def loss_fn_jax(params, model, batch, batch_stats):
     """loss function used for training."""
     logits, _ = model.apply(
         {'params': params, 'batch_stats': batch_stats},
@@ -57,29 +67,59 @@ def loss_fn(params, model, batch, batch_stats):
     return loss
 
 
-@mem.cache
-def run_one(fun_name, model_name, batch_size=16, n_reps=1,
-            num_classes=NUM_CLASSES):
-    key = jax.random.PRNGKey(0)
-    key, subkey = jax.random.split(key)
-    batch = {
-        'images': jax.random.normal(key, (batch_size, 128, 128, 3)),
-        'labels': jax.random.randint(subkey, (batch_size,), 0, num_classes)
-    }
+def loss_fn_torch(params, fun, batch):
+    """loss function used for training."""
+    logits = fun(params, batch['images'])
+    loss = torch.nn.functional.cross_entropy(logits, batch['labels'])
+    weight_decay = 0.0001
+    weight_l2 = sum(p.norm()**2 for p in params)
+    weight_penalty = weight_decay * 0.5 * weight_l2
+    return loss + weight_penalty
 
-    key, subkey = jax.random.split(key)
-    model = MODEL_DICT[model_name](num_classes=num_classes)
-    init = model.init(key, batch['images'], train=True)
-    params, batch_stats = init['params'], init['batch_stats']
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
-    )
+
+@mem.cache
+def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
+            num_classes=NUM_CLASSES):
+    if framework == 'jax':
+        key = jax.random.PRNGKey(0)
+        key, subkey = jax.random.split(key)
+        batch = {
+            'images': jax.random.normal(key, (batch_size, 128, 128, 3)),
+            'labels': jax.random.randint(subkey, (batch_size,), 0, num_classes)
+        }
+
+        key, subkey = jax.random.split(key)
+        model = MODEL_DICT[model_name]['model'](num_classes=num_classes)
+        init = model.init(key, batch['images'], train=True)
+        params, batch_stats = init['params'], init['batch_stats']
+        grad_fun = jax.jit(
+            lambda x: jax.grad(loss_fn_jax)(x, model, batch, batch_stats)
+        )
+    elif framework == 'torch':
+        use_gpu = torch.cuda.is_available()
+        gen = torch.Generator().manual_seed(0)
+        batch = {
+            'images': torch.randn(batch_size, 3, 128, 128, generator=gen),
+            'labels': torch.randint(0, num_classes, (batch_size,),
+                                    generator=gen)
+        }
+        model = MODEL_DICT[model_name]['model'](num_classes=num_classes)
+        replace_all_batch_norm_modules_(model)
+        model, params = functorch.make_functional(model)
+        if use_gpu:
+            batch = {k: v.cuda() for k, v in batch.items()}
+            model = model.cuda()
+
+        def grad_fun(x):
+            return torch.func.grad(loss_fn_torch)(x, model, batch)
+        batch_stats = None
 
     if fun_name == "grad":
         grad_fun(params)  # First run for compilation
     else:
         v = grad_fun(params)  # First run to get a v and for compilation
-        hvp_fun = fun_dict[fun_name]['fun'](model, batch, batch_stats)
+        hvp_fun = fun_dict[fun_name]['fun'](model, batch, batch_stats,
+                                            framework=framework)
         hvp_fun(params, v)  # First run for compilation
     times = []
     for _ in range(n_reps):
@@ -102,6 +142,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1,
         label=fun_name,
         time=times,
         batch_size=batch_size,
+        framework=framework,
         rep=jnp.arange(n_reps),
     )
 
@@ -115,16 +156,30 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
 
     executor = submitit.AutoExecutor("bench_hvp")
     executor.update_parameters(**config)
+    model_name_jax = [model_name for model_name in model_list
+                      if MODEL_DICT[model_name]['framework'] == 'jax']
+    model_name_torch = [model_name for model_name in model_list
+                        if MODEL_DICT[model_name]['framework'] == 'torch']
 
     with executor.batch():
         jobs = [
             executor.submit(run,
                             fun_name,
-                            model_name,
+                            model_name_jax,
+                            'jax',
                             batch_size)
             for fun_name, model_name, batch_size
             in itertools.product(fun_list, model_list, batch_size_list)
-        ]
+        ] + [
+            executor.submit(run,
+                            fun_name,
+                            model_name_torch,
+                            'torch',
+                            batch_size)
+            for fun_name, model_name, batch_size
+            in itertools.product(fun_list, model_list, batch_size_list)
+            ]
+
     print(f"First job ID: {jobs[0].job_id}")
 
     for t in progress.track(as_completed(jobs), total=len(jobs)):
@@ -138,78 +193,74 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
     return pd.concat([pd.DataFrame(res) for res in results])
 
 
-def hvp_naive(params, model, batch, batch_stats):
-    """
-    Returns the time taken to compute the Hessian-vector product by computing
-    the full Hessian matrix and then multiplying by the tangent vector v.
-    """
-
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
-    )
-    hvp_fun = jax.jit(
-        lambda x, v: jax.tree_map(jnp.dot,
-                                  jax.hessian(loss_fn)(x, model,
-                                                       batch, batch_stats),
-                                  v)
-    )
-
-    v = grad_fun(params)  # First run to get a v and for compilation
-    hvp_fun(params, v)  # First run for compilation
-
-    start = perf_counter()
-    jax.block_until_ready(hvp_fun(params, v))
-    time = perf_counter() - start
-
-    start = perf_counter()
-    jax.block_until_ready(grad_fun(params))
-    grad_time = perf_counter() - start
-    return time - grad_time
-
-
-def hvp_forward_over_reverse(model, batch, batch_stats):
+def hvp_forward_over_reverse(model, batch, batch_stats=None, framework='jax'):
     """
     Returns the time taken to compute the Hessian-vector product by
     forward-over-reverse propagation.
     """
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
-    )
-    hvp_fun = jax.jit(
-        lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
-    )
+    if framework == 'jax':
+        grad_fun = jax.jit(
+            lambda x: jax.grad(loss_fn_jax)(x, model, batch, batch_stats)
+        )
+        hvp_fun = jax.jit(
+            lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
+        )
+    elif framework == 'torch':
+        def grad_fun(x):
+            return torch.func.grad(loss_fn_torch)(x, model, batch)
+
+        def hvp_fun(x, v):
+            return torch.func.jvp(grad_fun, (x, ), (v, ))[1]
     return hvp_fun
 
 
-def hvp_reverse_over_forward(model, batch, batch_stats):
+def hvp_reverse_over_forward(model, batch, batch_stats=None, framework='jax'):
     """
     Returns the time taken to compute the
     Hessian-vector product by reverse-over-forward propagation.
     """
-    jvp_fun = jax.jit(
-        lambda x, v: jax.jvp(
-            lambda y: loss_fn(y, model, batch, batch_stats), (x, ), (v, )
-        )[1]
-    )
-    hvp_fun = jax.jit(
-        lambda x, v: jax.grad(jvp_fun)(x, v)
-    )
+    if framework == 'jax':
+        jvp_fun = jax.jit(
+            lambda x, v: jax.jvp(
+                lambda y: loss_fn_jax(y, model, batch, batch_stats),
+                (x, ), (v, )
+            )[1]
+        )
+        hvp_fun = jax.jit(
+            lambda x, v: jax.grad(jvp_fun)(x, v)
+        )
+    elif framework == 'torch':
+        def jvp_fun(x, v):
+            return torch.func.jvp(
+                lambda y: loss_fn_torch(y, model, batch), (x, ), (v, )
+            )[1]
+
+        def hvp_fun(x, v):
+            return torch.func.grad(jvp_fun)(x, v)
 
     return hvp_fun
 
 
-def hvp_reverse_over_reverse(model, batch, batch_stats):
+def hvp_reverse_over_reverse(model, batch, batch_stats=None, framework='jax'):
     """
     Returns the time taken to compute the Hessian-vector product by
     reverse-over-reverse propagation.
     """
+    if framework == 'jax':
+        grad_fun = jax.jit(
+            lambda x: jax.grad(loss_fn_jax)(x, model, batch, batch_stats)
+        )
+        hvp_fun = jax.jit(
+            lambda x, v: jax.grad(lambda x: utils.tree_dot(grad_fun(x), v))(x)
+        )
+    elif framework == 'torch':
+        def grad_fun(x):
+            return torch.func.grad(loss_fn_torch)(x, model, batch)
 
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
-    )
-    hvp_fun = jax.jit(
-        lambda x, v: jax.grad(lambda x: utils.tree_dot(grad_fun(x), v))(x)
-    )
+        def hvp_fun(x, v):
+            return torch.func.grad(
+                lambda x: torch.dot(grad_fun(x), v)
+            )(x)
     return hvp_fun
 
 
@@ -217,15 +268,16 @@ if __name__ == '__main__':
     fun_dict = dict(
         grad=dict(fun=None, label="Gradient"),
         # hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
-        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
-                                      label="HVP forward-over-reverse"),
-        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
-                                      label="HVP reverse-over-forward"),
-        hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
-                                      label="HVP reverse-over-reverse"),
+        hvp_forward_over_reverse=dict(
+            fun=hvp_forward_over_reverse, label="HVP forward-over-reverse"),
+        hvp_reverse_over_forward=dict(
+            fun=hvp_reverse_over_forward, label="HVP reverse-over-forward"),
+        hvp_reverse_over_reverse=dict(
+            fun=hvp_reverse_over_reverse, label="HVP reverse-over-reverse"),
     )
     model_list = MODEL_DICT.keys()
     fun_list = fun_dict.keys()
+    run_one('hvp_forward_over_reverse', 'resnet18_torch', framework='torch')
     df = run_bench(fun_list, model_list, n_reps=N_REPS,
                    batch_size_list=BATCH_SIZE_LIST,
                    slurm_config_path=SLURM_CONFIG)
