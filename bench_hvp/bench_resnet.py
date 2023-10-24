@@ -26,7 +26,7 @@ from joblib import Memory
 mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
-N_REPS = 100
+N_REPS = 10
 BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
     resnet18_flax=dict(model=resnet_flax.ResNet18, framework='jax'),
@@ -106,10 +106,10 @@ def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
         }
         model = MODEL_DICT[model_name]['model'](num_classes=num_classes)
         replace_all_batch_norm_modules_(model)
-        model, params = functorch.make_functional(model)
         if use_gpu:
             batch = {k: v.cuda() for k, v in batch.items()}
             model = model.cuda()
+        model, params = functorch.make_functional(model)
 
         def grad_fun(x):
             return torch.func.grad(loss_fn_torch)(x, model, batch)
