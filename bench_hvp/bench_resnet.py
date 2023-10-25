@@ -5,7 +5,6 @@ from models import resnet_flax
 from flax.training import common_utils
 
 import torch
-import functorch
 from torchvision.models import resnet as resnet_torch
 from functorch.experimental import replace_all_batch_norm_modules_
 
@@ -27,20 +26,20 @@ mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
 N_REPS = 10
-BATCH_SIZE_LIST = [16, 32, 64, 128]
+BATCH_SIZE_LIST = [16]
 MODEL_DICT = dict(
     resnet18_flax=dict(model=resnet_flax.ResNet18, framework='jax'),
-    resnet34_flax=dict(model=resnet_flax.ResNet34, framework='jax'),
-    resnet50_flax=dict(model=resnet_flax.ResNet50, framework='jax'),
-    resnet101_flax=dict(model=resnet_flax.ResNet101, framework='jax'),
-    resnet152_flax=dict(model=resnet_flax.ResNet152, framework='jax'),
+    # resnet34_flax=dict(model=resnet_flax.ResNet34, framework='jax'),
+    # resnet50_flax=dict(model=resnet_flax.ResNet50, framework='jax'),
+    # resnet101_flax=dict(model=resnet_flax.ResNet101, framework='jax'),
+    # resnet152_flax=dict(model=resnet_flax.ResNet152, framework='jax'),
     resnet18_torch=dict(model=resnet_torch.resnet18, framework='torch'),
-    resnet34_torch=dict(model=resnet_torch.resnet34, framework='torch'),
-    resnet50_torch=dict(model=resnet_torch.resnet50, framework='torch'),
-    resnet101_torch=dict(model=resnet_torch.resnet101, framework='torch'),
-    resnet152_torch=dict(model=resnet_torch.resnet152, framework='torch'),
+    # resnet34_torch=dict(model=resnet_torch.resnet34, framework='torch'),
+    # resnet50_torch=dict(model=resnet_torch.resnet50, framework='torch'),
+    # resnet101_torch=dict(model=resnet_torch.resnet101, framework='torch'),
+    # resnet152_torch=dict(model=resnet_torch.resnet152, framework='torch'),
 )
-SLURM_CONFIG = 'config/slurm.yml'
+SLURM_CONFIG = 'config/slurm_margaret.yml'
 
 
 def cross_entropy_loss(logits, labels):
@@ -67,12 +66,12 @@ def loss_fn_jax(params, model, batch, batch_stats):
     return loss
 
 
-def loss_fn_torch(params, fun, batch):
+def loss_fn_torch(params, model, batch):
     """loss function used for training."""
-    logits = fun(params, batch['images'])
+    logits = torch.func.functional_call(model, params, (batch['images'], ))
     loss = torch.nn.functional.cross_entropy(logits, batch['labels'])
     weight_decay = 0.0001
-    weight_l2 = sum(p.norm()**2 for p in params)
+    weight_l2 = sum(p.norm()**2 for p in params.values() if p.ndim > 1)
     weight_penalty = weight_decay * 0.5 * weight_l2
     return loss + weight_penalty
 
@@ -110,7 +109,7 @@ def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
         if use_gpu:
             batch = {k: v.cuda() for k, v in batch.items()}
             model = model.cuda()
-        model, params = functorch.make_functional(model)
+        params = dict(model.named_parameters())
 
         def grad_fun(x):
             return torch.func.grad(loss_fn_torch)(x, model, batch)
@@ -267,8 +266,10 @@ def hvp_reverse_over_reverse(model, batch, batch_stats=None, framework='jax'):
 
         def hvp_fun(x, v):
             return torch.func.grad(
-                lambda x: sum(torch.dot(a.ravel(), b.ravel())
-                              for a, b in zip(grad_fun(x), v))
+                lambda x: sum(
+                    torch.dot(a.ravel(), b.ravel())
+                    for a, b in zip(grad_fun(x).values(), v.values())
+                )
             )(x)
     return hvp_fun
 
@@ -286,7 +287,8 @@ if __name__ == '__main__':
     )
     model_list = MODEL_DICT.keys()
     fun_list = fun_dict.keys()
-    df = run_bench(fun_list, model_list, n_reps=N_REPS,
-                   batch_size_list=BATCH_SIZE_LIST,
-                   slurm_config_path=SLURM_CONFIG)
-    df.to_parquet('../outputs/bench_resnet.parquet')
+    run_one('hvp_reverse_over_reverse', 'resnet18_torch', framework='torch',)
+    # df = run_bench(fun_list, model_list, n_reps=N_REPS,
+    #                batch_size_list=BATCH_SIZE_LIST,
+    #                slurm_config_path=SLURM_CONFIG)
+    # df.to_parquet('../outputs/bench_resnet3.parquet')
