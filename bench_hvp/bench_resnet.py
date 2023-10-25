@@ -67,7 +67,6 @@ def loss_fn_jax(params, model, batch, batch_stats):
     return loss
 
 
-# @torch.compile
 def loss_fn_torch(params, fun, batch):
     """loss function used for training."""
     logits = fun(params, batch['images'])
@@ -104,6 +103,8 @@ def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
             'labels': torch.randint(0, num_classes, (batch_size,),
                                     generator=gen)
         }
+        if use_gpu:
+            torch.cuda.empty_cache()
         model = MODEL_DICT[model_name]['model'](num_classes=num_classes)
         replace_all_batch_norm_modules_(model)
         if use_gpu:
@@ -141,13 +142,14 @@ def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
                 time = perf_counter() - start
                 start = perf_counter()
                 jax.block_until_ready(grad_fun(params))
+                grad_time = perf_counter() - start
             elif framework == 'torch':
                 start = perf_counter()
                 hvp_fun(params, v)
                 time = perf_counter() - start
                 start = perf_counter()
                 grad_fun(params)
-            grad_time = perf_counter() - start
+                grad_time = perf_counter() - start
             times.append(time - grad_time)
 
     return dict(
@@ -169,6 +171,9 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
 
     executor = submitit.AutoExecutor("bench_hvp")
     executor.update_parameters(**config)
+    skip = [(128, 'resnet50_torch'),
+            (64, 'resnet101_torch'), (128, 'resnet101_torch'),
+            (64, 'resnet152_torch'), (128, 'resnet152_torch')]
 
     with executor.batch():
         jobs = [
@@ -179,6 +184,7 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
                             batch_size)
             for fun_name, model_name, batch_size
             in itertools.product(fun_list, model_list, batch_size_list)
+            if (batch_size, model_name) not in skip
         ]
 
     print(f"First job ID: {jobs[0].job_id}")
@@ -233,7 +239,8 @@ def hvp_reverse_over_forward(model, batch, batch_stats=None, framework='jax'):
     elif framework == 'torch':
         def jvp_fun(x, v):
             return torch.func.jvp(
-                lambda y: loss_fn_torch(y, model, batch), (x, ), (v, )
+                lambda y: loss_fn_torch(y, model, batch),
+                (x, ), (v, )
             )[1]
 
         def hvp_fun(x, v):
@@ -260,7 +267,8 @@ def hvp_reverse_over_reverse(model, batch, batch_stats=None, framework='jax'):
 
         def hvp_fun(x, v):
             return torch.func.grad(
-                lambda x: torch.dot(grad_fun(x), v)
+                lambda x: sum(torch.dot(a.ravel(), b.ravel())
+                              for a, b in zip(grad_fun(x), v))
             )(x)
     return hvp_fun
 
