@@ -29,15 +29,15 @@ N_REPS = 10
 BATCH_SIZE_LIST = [16]
 MODEL_DICT = dict(
     resnet18_flax=dict(model=resnet_flax.ResNet18, framework='jax'),
-    # resnet34_flax=dict(model=resnet_flax.ResNet34, framework='jax'),
-    # resnet50_flax=dict(model=resnet_flax.ResNet50, framework='jax'),
-    # resnet101_flax=dict(model=resnet_flax.ResNet101, framework='jax'),
-    # resnet152_flax=dict(model=resnet_flax.ResNet152, framework='jax'),
+    resnet34_flax=dict(model=resnet_flax.ResNet34, framework='jax'),
+    resnet50_flax=dict(model=resnet_flax.ResNet50, framework='jax'),
+    resnet101_flax=dict(model=resnet_flax.ResNet101, framework='jax'),
+    resnet152_flax=dict(model=resnet_flax.ResNet152, framework='jax'),
     resnet18_torch=dict(model=resnet_torch.resnet18, framework='torch'),
-    # resnet34_torch=dict(model=resnet_torch.resnet34, framework='torch'),
-    # resnet50_torch=dict(model=resnet_torch.resnet50, framework='torch'),
-    # resnet101_torch=dict(model=resnet_torch.resnet101, framework='torch'),
-    # resnet152_torch=dict(model=resnet_torch.resnet152, framework='torch'),
+    resnet34_torch=dict(model=resnet_torch.resnet34, framework='torch'),
+    resnet50_torch=dict(model=resnet_torch.resnet50, framework='torch'),
+    resnet101_torch=dict(model=resnet_torch.resnet101, framework='torch'),
+    resnet152_torch=dict(model=resnet_torch.resnet152, framework='torch'),
 )
 SLURM_CONFIG = 'config/slurm_margaret.yml'
 
@@ -116,6 +116,7 @@ def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
         batch_stats = None
 
     if fun_name == "grad":
+        start = perf_counter()
         grad_fun(params)  # First run for compilation
     else:
         v = grad_fun(params)  # First run to get a v and for compilation
@@ -162,8 +163,9 @@ def run_one(fun_name, model_name, framework='jax', batch_size=16, n_reps=1,
 
 
 def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
-              slurm_config_path=None):
-    run = partial(run_one, num_classes=num_classes, n_reps=n_reps)
+              slurm_config_path=None, framework='jax'):
+    run = partial(run_one, num_classes=num_classes, n_reps=n_reps,
+                  framework=framework)
 
     with open(slurm_config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -179,7 +181,6 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
             executor.submit(run,
                             fun_name,
                             model_name,
-                            MODEL_DICT[model_name]['framework'],
                             batch_size)
             for fun_name, model_name, batch_size
             in itertools.product(fun_list, model_list, batch_size_list)
@@ -275,6 +276,11 @@ def hvp_reverse_over_reverse(model, batch, batch_stats=None, framework='jax'):
 
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--framework', '-f', type=str, default='jax',
+                        choices=['jax', 'torch'])
+    framework = parser.parse_args().framework
     fun_dict = dict(
         grad=dict(fun=None, label="Gradient"),
         # hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
@@ -285,10 +291,11 @@ if __name__ == '__main__':
         hvp_reverse_over_reverse=dict(
             fun=hvp_reverse_over_reverse, label="HVP reverse-over-reverse"),
     )
-    model_list = MODEL_DICT.keys()
+    model_list = [k for k in MODEL_DICT.keys()
+                  if MODEL_DICT[k]['framework'] == framework]
     fun_list = fun_dict.keys()
-    run_one('hvp_reverse_over_reverse', 'resnet18_torch', framework='torch',)
-    # df = run_bench(fun_list, model_list, n_reps=N_REPS,
-    #                batch_size_list=BATCH_SIZE_LIST,
-    #                slurm_config_path=SLURM_CONFIG)
-    # df.to_parquet('../outputs/bench_resnet3.parquet')
+    df = run_bench(fun_list, model_list, n_reps=N_REPS,
+                   batch_size_list=BATCH_SIZE_LIST,
+                   slurm_config_path=SLURM_CONFIG,
+                   framework=framework)
+    df.to_parquet(f'../outputs/bench_resnet_{framework}.parquet')
