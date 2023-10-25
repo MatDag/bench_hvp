@@ -77,7 +77,7 @@ def loss_fn_torch(params, model, batch):
 
 
 @mem.cache
-def run_one(fun_name, model_name, batch_size=16, n_reps=1, framework='jax', 
+def run_one(fun_name, model_name, batch_size=16, n_reps=1, framework='jax',
             num_classes=NUM_CLASSES):
     if framework == 'jax':
         key = jax.random.PRNGKey(0)
