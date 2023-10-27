@@ -70,10 +70,10 @@ gs = plt.GridSpec(2, 2, width_ratios=[1, 1],
 
 
 for i, framework in enumerate(df['framework'].unique()):
-    if i > 0:
-        ax = fig.add_subplot(gs[1, i], sharey=ax)
-    else:
+    if i == 0:
         ax = fig.add_subplot(gs[1, i])
+    else:
+        ax = fig.add_subplot(gs[1, i], sharey=ax)
     lines = []
 
     width = .20

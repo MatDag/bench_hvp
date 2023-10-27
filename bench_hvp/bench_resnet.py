@@ -23,8 +23,6 @@ from submitit.helpers import as_completed
 from pynvml import nvmlDeviceGetMemoryInfo
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex
 
-
-
 import utils
 
 from joblib import Memory
