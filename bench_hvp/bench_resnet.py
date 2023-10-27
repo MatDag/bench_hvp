@@ -1,6 +1,7 @@
 import jax
 import optax
 import jax.numpy as jnp
+from jax.lib import xla_bridge
 from models import resnet_flax
 from flax.training import common_utils
 
@@ -19,6 +20,11 @@ import itertools
 from rich import progress
 from submitit.helpers import as_completed
 
+from pynvml import nvmlDeviceGetMemoryInfo
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex
+
+
+
 import utils
 
 from joblib import Memory
@@ -26,7 +32,7 @@ mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
 N_REPS = 10
-BATCH_SIZE_LIST = [16]
+BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
     resnet18_flax=dict(model=resnet_flax.ResNet18, framework='jax'),
     resnet34_flax=dict(model=resnet_flax.ResNet34, framework='jax'),
@@ -80,6 +86,7 @@ def loss_fn_torch(params, model, batch):
 def run_one(fun_name, model_name, batch_size=16, n_reps=1, framework='jax',
             num_classes=NUM_CLASSES):
     if framework == 'jax':
+        use_gpu = xla_bridge.get_backend().platform == 'gpu'
         key = jax.random.PRNGKey(0)
         key, subkey = jax.random.split(key)
         batch = {
@@ -102,8 +109,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1, framework='jax',
             'labels': torch.randint(0, num_classes, (batch_size,),
                                     generator=gen)
         }
-        if use_gpu:
-            torch.cuda.empty_cache()
+
         model = MODEL_DICT[model_name]['model'](num_classes=num_classes)
         replace_all_batch_norm_modules_(model)
         if use_gpu:
@@ -124,33 +130,60 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1, framework='jax',
                                             framework=framework)
         hvp_fun(params, v)  # First run for compilation
     times = []
+    memories = []
+    if use_gpu:
+        torch.cuda.empty_cache()
+        nvmlInit()
+        handle = nvmlDeviceGetHandleByIndex(0)
     for _ in range(n_reps):
         if fun_name == "grad":
             if framework == 'jax':
+                if use_gpu:
+                    memory_start = nvmlDeviceGetMemoryInfo(handle).used
                 start = perf_counter()
                 jax.block_until_ready(grad_fun(params))
                 time = perf_counter() - start
+                if use_gpu:
+                    memory = nvmlDeviceGetMemoryInfo(handle).used
+                    memory -= memory_start
             elif framework == 'torch':
+                if use_gpu:
+                    memory_start = nvmlDeviceGetMemoryInfo(handle).used
                 start = perf_counter()
                 grad_fun(params)
                 time = perf_counter() - start
+                if use_gpu:
+                    memory = nvmlDeviceGetMemoryInfo(handle).used
+                    memory -= memory_start
             times.append(time)
+            memories.append(memory)
         else:
             if framework == 'jax':
+                if use_gpu:
+                    memory_start = nvmlDeviceGetMemoryInfo(handle).used
                 start = perf_counter()
                 jax.block_until_ready(hvp_fun(params, v))
                 time = perf_counter() - start
+                if use_gpu:
+                    memory = nvmlDeviceGetMemoryInfo(handle).used
+                    memory -= memory_start
                 start = perf_counter()
                 jax.block_until_ready(grad_fun(params))
                 grad_time = perf_counter() - start
             elif framework == 'torch':
+                if use_gpu:
+                    memory_start = nvmlDeviceGetMemoryInfo(handle).used
                 start = perf_counter()
                 hvp_fun(params, v)
                 time = perf_counter() - start
+                if use_gpu:
+                    memory = nvmlDeviceGetMemoryInfo(handle).used
+                    memory -= memory_start
                 start = perf_counter()
                 grad_fun(params)
                 grad_time = perf_counter() - start
             times.append(time - grad_time)
+            memories.append(memory)
 
     return dict(
         model=model_name,
