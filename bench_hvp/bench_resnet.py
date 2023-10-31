@@ -23,6 +23,8 @@ from submitit.helpers import as_completed
 from pynvml import nvmlDeviceGetMemoryInfo
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex
 
+from memory_monitor import GPUMemoryMonitor
+
 import utils
 
 from joblib import Memory
@@ -30,18 +32,19 @@ mem = Memory(location='__cache__')
 
 NUM_CLASSES = 1000
 N_REPS = 10
-BATCH_SIZE_LIST = [16, 32, 64, 128]
+# BATCH_SIZE_LIST = [16, 32, 64, 128]
+BATCH_SIZE_LIST = [16]
 MODEL_DICT = dict(
     resnet18_flax=dict(model=resnet_flax.ResNet18, framework='jax'),
     resnet34_flax=dict(model=resnet_flax.ResNet34, framework='jax'),
-    resnet50_flax=dict(model=resnet_flax.ResNet50, framework='jax'),
-    resnet101_flax=dict(model=resnet_flax.ResNet101, framework='jax'),
-    resnet152_flax=dict(model=resnet_flax.ResNet152, framework='jax'),
-    resnet18_torch=dict(model=resnet_torch.resnet18, framework='torch'),
-    resnet34_torch=dict(model=resnet_torch.resnet34, framework='torch'),
-    resnet50_torch=dict(model=resnet_torch.resnet50, framework='torch'),
-    resnet101_torch=dict(model=resnet_torch.resnet101, framework='torch'),
-    resnet152_torch=dict(model=resnet_torch.resnet152, framework='torch'),
+    # resnet50_flax=dict(model=resnet_flax.ResNet50, framework='jax'),
+    # resnet101_flax=dict(model=resnet_flax.ResNet101, framework='jax'),
+    # resnet152_flax=dict(model=resnet_flax.ResNet152, framework='jax'),
+    # resnet18_torch=dict(model=resnet_torch.resnet18, framework='torch'),
+    # resnet34_torch=dict(model=resnet_torch.resnet34, framework='torch'),
+    # resnet50_torch=dict(model=resnet_torch.resnet50, framework='torch'),
+    # resnet101_torch=dict(model=resnet_torch.resnet101, framework='torch'),
+    # resnet152_torch=dict(model=resnet_torch.resnet152, framework='torch'),
 )
 SLURM_CONFIG = 'config/slurm_margaret.yml'
 
@@ -136,14 +139,15 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1, framework='jax',
     for _ in range(n_reps):
         if fun_name == "grad":
             if framework == 'jax':
-                if use_gpu:
-                    memory_start = nvmlDeviceGetMemoryInfo(handle).used
                 start = perf_counter()
                 jax.block_until_ready(grad_fun(params))
                 time = perf_counter() - start
                 if use_gpu:
-                    memory = nvmlDeviceGetMemoryInfo(handle).used
-                    memory -= memory_start
+                    monitor = GPUMemoryMonitor()
+                    grad_fun(params)
+                    monitor.join()
+                    memory = max(monitor.memory_buffer)
+                    # print(f'{fun_name}: {monitor.memory_buffer}')
             elif framework == 'torch':
                 if use_gpu:
                     memory_start = nvmlDeviceGetMemoryInfo(handle).used
@@ -157,17 +161,18 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1, framework='jax',
             memories.append(memory)
         else:
             if framework == 'jax':
-                if use_gpu:
-                    memory_start = nvmlDeviceGetMemoryInfo(handle).used
                 start = perf_counter()
                 jax.block_until_ready(hvp_fun(params, v))
                 time = perf_counter() - start
-                if use_gpu:
-                    memory = nvmlDeviceGetMemoryInfo(handle).used
-                    memory -= memory_start
                 start = perf_counter()
                 jax.block_until_ready(grad_fun(params))
                 grad_time = perf_counter() - start
+                if use_gpu:
+                    monitor = GPUMemoryMonitor()
+                    grad_fun(params)
+                    monitor.join()
+                    memory = max(monitor.memory_buffer)
+                    print(f'{fun_name}: {monitor.memory_buffer}')
             elif framework == 'torch':
                 if use_gpu:
                     memory_start = nvmlDeviceGetMemoryInfo(handle).used
