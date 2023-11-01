@@ -2,7 +2,6 @@ import jax
 import optax
 import jax.numpy as jnp
 from flax.training import common_utils
-from models import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 
 import pandas as pd
 from functools import partial
@@ -15,6 +14,9 @@ import itertools
 from rich import progress
 from submitit.helpers import as_completed
 
+from transformers import FlaxResNetForImageClassification
+from transformers import FlaxViTForImageClassification
+
 import utils
 
 from joblib import Memory
@@ -24,11 +26,18 @@ NUM_CLASSES = 1000
 N_REPS = 100
 BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
-    resnet18=ResNet18,
-    resnet34=ResNet34,
-    resnet50=ResNet50,
-    resnet101=ResNet101,
-    resnet152=ResNet152,
+    resnet18=dict(module=FlaxResNetForImageClassification,
+                  model="microsoft/resnet-18"),
+    resnet34=dict(module=FlaxResNetForImageClassification,
+                  model="microsoft/resnet-34"),
+    resnet50=dict(module=FlaxResNetForImageClassification,
+                  model="microsoft/resnet-50"),
+    resnet101=dict(module=FlaxResNetForImageClassification,
+                   model="microsoft/resnet-101"),
+    resnet152=dict(module=FlaxResNetForImageClassification,
+                   model="microsoft/resnet-152"),
+    vit=dict(module=FlaxViTForImageClassification,
+             model="google/vit-base-patch16-224"),
 )
 SLURM_CONFIG = 'config/slurm.yml'
 
@@ -40,12 +49,9 @@ def cross_entropy_loss(logits, labels):
     return jnp.mean(xentropy)
 
 
-def loss_fn(params, model, batch, batch_stats):
+def loss_fn(params, model, batch):
     """loss function used for training."""
-    logits, _ = model.apply(
-        {'params': params, 'batch_stats': batch_stats},
-        batch['images'],
-        mutable=['batch_stats'])
+    logits = model._module.apply(params, batch['images']).logits
     loss = cross_entropy_loss(logits, batch['labels'])
     weight_penalty_params = jax.tree_util.tree_leaves(params)
     weight_decay = 0.0001
@@ -63,23 +69,26 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1,
     key = jax.random.PRNGKey(0)
     key, subkey = jax.random.split(key)
     batch = {
-        'images': jax.random.normal(key, (batch_size, 128, 128, 3)),
+        'images': jax.random.normal(key, (batch_size, 224, 224, 3)),
         'labels': jax.random.randint(subkey, (batch_size,), 0, num_classes)
     }
-
     key, subkey = jax.random.split(key)
-    model = MODEL_DICT[model_name](num_classes=num_classes)
-    init = model.init(key, batch['images'], train=True)
-    params, batch_stats = init['params'], init['batch_stats']
+    model = MODEL_DICT[model_name]['module'].from_pretrained(
+        MODEL_DICT[model_name]['model']
+    )
+    # init = model.init(key, batch['images'], train=True)
+    params = model.params
+    if "params" not in params.keys():
+        params = {"params": params}
     grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+        lambda x: jax.grad(loss_fn)(x, model, batch)
     )
 
     if fun_name == "grad":
         grad_fun(params)  # First run for compilation
     else:
         v = grad_fun(params)  # First run to get a v and for compilation
-        hvp_fun = fun_dict[fun_name]['fun'](model, batch, batch_stats)
+        hvp_fun = fun_dict[fun_name]['fun'](model, batch)
         hvp_fun(params, v)  # First run for compilation
     times = []
     for _ in range(n_reps):
