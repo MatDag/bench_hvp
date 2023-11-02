@@ -379,10 +379,7 @@ if __name__ == '__main__':
     model_list = [k for k in MODEL_DICT.keys()
                   if MODEL_DICT[k]['framework'] == framework]
     fun_list = fun_dict.keys()
-    import ipdb
-    ipdb.set_trace()
-    # run_one('hvp_forward_over_reverse', 'bert_flax')
-    # df = run_bench(fun_list, model_list, n_reps=N_REPS,
-    #                batch_size_list=BATCH_SIZE_LIST,
-    #                slurm_config_path=SLURM_CONFIG)
-    # df.to_parquet(f'../outputs/bench_hvp_neural_network_{framework}.parquet')
+    df = run_bench(fun_list, model_list, n_reps=N_REPS,
+                   batch_size_list=BATCH_SIZE_LIST,
+                   slurm_config_path=SLURM_CONFIG)
+    df.to_parquet(f'../outputs/bench_hvp_neural_network_{framework}.parquet')
