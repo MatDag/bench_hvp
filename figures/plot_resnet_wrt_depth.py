@@ -1,8 +1,12 @@
+<<<<<<< HEAD
 import numpy as np
+=======
+>>>>>>> main
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
+<<<<<<< HEAD
 BATCH_SIZE = 32
 
 LEGEND_INSIDE = True
@@ -11,6 +15,14 @@ DEFAULT_WIDTH = 8
 DEFAULT_HEIGHT = 5
 
 fontsize = 7
+=======
+BATCH_SIZE = 128
+
+LEGEND_RATIO = 0.1
+DEFAULT_WIDTH = 7
+DEFAULT_DOUBLE_WIDTH = 6.75
+DEFAULT_HEIGHT = 3
+>>>>>>> main
 
 STYLES = dict(
     grad=dict(label='Gradient', color='#5778a4'),

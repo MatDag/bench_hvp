@@ -1,8 +1,11 @@
 import jax
 import jax.numpy as jnp
 
+<<<<<<< HEAD
 import torch
 
+=======
+>>>>>>> main
 import pandas as pd
 from functools import partial
 
@@ -20,6 +23,7 @@ from joblib import Memory
 mem = Memory(location='__cache__')
 
 N_REPS = 100
+<<<<<<< HEAD
 DIM_LIST = jnp.logspace(1, 5, 14, dtype=jnp.int32)
 SLURM_CONFIG = 'config/slurm_cpu.yml'
 
@@ -47,6 +51,21 @@ def run_one(fun_name, framework='jax', dim=1, n_reps=1):
         x = torch.randn(dim, generator=gen)
         fun = f_torch
         grad_fun = torch.func.grad(fun)
+=======
+DIM_LIST = jnp.logspace(0, 5, 6, dtype=jnp.int32)
+SLURM_CONFIG = 'config/slurm_cpu.yml'
+
+
+def f(x):
+    return jnp.sum(jnp.tanh(x)**2)
+
+
+@mem.cache
+def run_one(fun_name, dim=1, n_reps=1):
+    key = jax.random.PRNGKey(0)
+    x = jax.random.normal(key, (dim, ))
+    grad_fun = jax.jit(jax.grad(f))
+>>>>>>> main
 
     if fun_name == "grad":
         grad_fun(x)  # First run for compilation
