@@ -14,45 +14,51 @@ import itertools
 from rich import progress
 from submitit.helpers import as_completed
 
-from transformers import FlaxResNetForImageClassification
 from transformers import FlaxViTForImageClassification
+from transformers import FlaxResNetForImageClassification
+from transformers import FlaxBertForSequenceClassification
 
 import utils
 
 from joblib import Memory
 mem = Memory(location='__cache__')
 
-NUM_CLASSES = 1000
 N_REPS = 100
 BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
     resnet18=dict(module=FlaxResNetForImageClassification,
-                  model="microsoft/resnet-18"),
+                  model="microsoft/resnet-18", num_classes=1000),
     resnet34=dict(module=FlaxResNetForImageClassification,
-                  model="microsoft/resnet-34"),
+                  model="microsoft/resnet-34", num_classes=1000),
     resnet50=dict(module=FlaxResNetForImageClassification,
-                  model="microsoft/resnet-50"),
+                  model="microsoft/resnet-50", num_classes=1000),
     resnet101=dict(module=FlaxResNetForImageClassification,
-                   model="microsoft/resnet-101"),
+                   model="microsoft/resnet-101", num_classes=1000),
     resnet152=dict(module=FlaxResNetForImageClassification,
-                   model="microsoft/resnet-152"),
+                   model="microsoft/resnet-152", num_classes=1000),
     vit=dict(module=FlaxViTForImageClassification,
-             model="google/vit-base-patch16-224"),
+             model="google/vit-base-patch16-224", num_classes=1000),
+    bert=dict(module=FlaxBertForSequenceClassification,
+              model="bert-base-uncased", num_classes=2),
 )
 SLURM_CONFIG = 'config/slurm.yml'
 
 
-def cross_entropy_loss(logits, labels):
-    one_hot_labels = common_utils.onehot(labels, num_classes=NUM_CLASSES)
+def cross_entropy_loss(logits, labels, num_classes=1000):
+    one_hot_labels = common_utils.onehot(labels, num_classes=num_classes)
     xentropy = optax.softmax_cross_entropy(logits=logits,
                                            labels=one_hot_labels)
     return jnp.mean(xentropy)
 
 
-def loss_fn(params, model, batch):
+def loss_fn(params, model, batch, num_classes=1000):
     """loss function used for training."""
-    logits = model._module.apply(params, batch['images']).logits
-    loss = cross_entropy_loss(logits, batch['labels'])
+    inputs = {k: v for k, v in batch.items() if k != "labels"}
+    if 'images' in inputs.keys():
+        logits = model._module.apply(params, inputs['images']).logits
+    else:
+        logits = model._module.apply(params, **inputs).logits
+    loss = cross_entropy_loss(logits, batch['labels'], num_classes=num_classes)
     weight_penalty_params = jax.tree_util.tree_leaves(params)
     weight_decay = 0.0001
     weight_l2 = sum(jnp.sum(x ** 2)
@@ -64,14 +70,29 @@ def loss_fn(params, model, batch):
 
 
 @mem.cache
-def run_one(fun_name, model_name, batch_size=16, n_reps=1,
-            num_classes=NUM_CLASSES):
+def run_one(fun_name, model_name, batch_size=16, n_reps=1):
     key = jax.random.PRNGKey(0)
-    key, subkey = jax.random.split(key)
-    batch = {
-        'images': jax.random.normal(key, (batch_size, 224, 224, 3)),
-        'labels': jax.random.randint(subkey, (batch_size,), 0, num_classes)
-    }
+    num_classes = MODEL_DICT[model_name]['num_classes']
+    if model_name != "bert":
+        key, subkey = jax.random.split(key)
+        batch = {
+            'images': jax.random.normal(key, (batch_size, 224, 224, 3)),
+            'labels': jax.random.randint(subkey, (batch_size,), 0, num_classes)
+        }
+    else:
+        keys = jax.random.split(key, 4)
+        batch = {
+            'input_ids': jax.random.randint(keys[0], (batch_size, 128),
+                                            0, 10000),
+            'attention_mask': jax.random.randint(keys[1], (batch_size, 128),
+                                                 0, 2),
+            'token_type_ids': jax.random.randint(keys[2], (batch_size, 128),
+                                                 0, 2),
+            'position_ids': None,
+            'head_mask': None,
+            'labels': jax.random.randint(keys[3], (batch_size,),
+                                         0, num_classes)
+        }
     key, subkey = jax.random.split(key)
     model = MODEL_DICT[model_name]['module'].from_pretrained(
         MODEL_DICT[model_name]['model']
@@ -81,14 +102,15 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1,
     if "params" not in params.keys():
         params = {"params": params}
     grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch)
+        lambda x: jax.grad(loss_fn)(x, model, batch, num_classes=num_classes)
     )
 
     if fun_name == "grad":
         grad_fun(params)  # First run for compilation
     else:
         v = grad_fun(params)  # First run to get a v and for compilation
-        hvp_fun = fun_dict[fun_name]['fun'](model, batch)
+        hvp_fun = fun_dict[fun_name]['fun'](model, batch,
+                                            num_classes=num_classes)
         hvp_fun(params, v)  # First run for compilation
     times = []
     for _ in range(n_reps):
@@ -117,7 +139,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1,
 
 def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
               slurm_config_path=None):
-    run = partial(run_one, num_classes=num_classes, n_reps=n_reps)
+    run = partial(run_one, n_reps=n_reps)
 
     with open(slurm_config_path, "r") as f:
         config = yaml.safe_load(f)
@@ -147,42 +169,13 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list, num_classes=1000,
     return pd.concat([pd.DataFrame(res) for res in results])
 
 
-def hvp_naive(params, model, batch, batch_stats):
+def hvp_forward_over_reverse(model, batch, num_classes=1000):
     """
-    Returns the time taken to compute the Hessian-vector product by computing
-    the full Hessian matrix and then multiplying by the tangent vector v.
-    """
-
-    grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
-    )
-    hvp_fun = jax.jit(
-        lambda x, v: jax.tree_map(jnp.dot,
-                                  jax.hessian(loss_fn)(x, model,
-                                                       batch, batch_stats),
-                                  v)
-    )
-
-    v = grad_fun(params)  # First run to get a v and for compilation
-    hvp_fun(params, v)  # First run for compilation
-
-    start = perf_counter()
-    jax.block_until_ready(hvp_fun(params, v))
-    time = perf_counter() - start
-
-    start = perf_counter()
-    jax.block_until_ready(grad_fun(params))
-    grad_time = perf_counter() - start
-    return time - grad_time
-
-
-def hvp_forward_over_reverse(model, batch, batch_stats):
-    """
-    Returns the time taken to compute the Hessian-vector product by
-    forward-over-reverse propagation.
+    Returns the Hessian-vector product operator that uses forward-over-reverse
+    propagation.
     """
     grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+        lambda x: jax.grad(loss_fn)(x, model, batch, num_classes=num_classes)
     )
     hvp_fun = jax.jit(
         lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
@@ -190,14 +183,15 @@ def hvp_forward_over_reverse(model, batch, batch_stats):
     return hvp_fun
 
 
-def hvp_reverse_over_forward(model, batch, batch_stats):
+def hvp_reverse_over_forward(model, batch, num_classes=1000):
     """
-    Returns the time taken to compute the
-    Hessian-vector product by reverse-over-forward propagation.
+    Returns the Hessian-vector product operator that uses reverse-over-forward
+    propagation.
     """
     jvp_fun = jax.jit(
         lambda x, v: jax.jvp(
-            lambda y: loss_fn(y, model, batch, batch_stats), (x, ), (v, )
+            lambda y: loss_fn(y, model, batch, num_classes=num_classes),
+            (x, ), (v, )
         )[1]
     )
     hvp_fun = jax.jit(
@@ -207,14 +201,14 @@ def hvp_reverse_over_forward(model, batch, batch_stats):
     return hvp_fun
 
 
-def hvp_reverse_over_reverse(model, batch, batch_stats):
+def hvp_reverse_over_reverse(model, batch, num_classes=1000):
     """
-    Returns the time taken to compute the Hessian-vector product by
-    reverse-over-reverse propagation.
+    Returns the Hessian-vector product operator that uses reverse-over-reverse
+    propagation.
     """
 
     grad_fun = jax.jit(
-        lambda x: jax.grad(loss_fn)(x, model, batch, batch_stats)
+        lambda x: jax.grad(loss_fn)(x, model, batch, num_classes=num_classes)
     )
     hvp_fun = jax.jit(
         lambda x, v: jax.grad(lambda x: utils.tree_dot(grad_fun(x), v))(x)
@@ -225,7 +219,6 @@ def hvp_reverse_over_reverse(model, batch, batch_stats):
 if __name__ == '__main__':
     fun_dict = dict(
         grad=dict(fun=None, label="Gradient"),
-        # hvp_naive=dict(fun=hvp_naive, label="HVP naive"),
         hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
                                       label="HVP forward-over-reverse"),
         hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
@@ -238,4 +231,4 @@ if __name__ == '__main__':
     df = run_bench(fun_list, model_list, n_reps=N_REPS,
                    batch_size_list=BATCH_SIZE_LIST,
                    slurm_config_path=SLURM_CONFIG)
-    df.to_parquet('../outputs/bench_resnet.parquet')
+    df.to_parquet('../outputs/bench_hvp_neural_nets.parquet')
