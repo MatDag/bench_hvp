@@ -32,44 +32,44 @@ import utils
 from joblib import Memory
 mem = Memory(location='__cache__')
 
-N_REPS = 100
+N_REPS = 10
 BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
-    resnet18_flax=dict(module=FlaxResNetForImageClassification,
-                       model="microsoft/resnet-18", framework="jax",
-                       num_classes=1000),
-    resnet34_flax=dict(module=FlaxResNetForImageClassification,
-                       model="microsoft/resnet-34", framework="jax",
-                       num_classes=1000),
+    # resnet18_flax=dict(module=FlaxResNetForImageClassification,
+    #                    model="microsoft/resnet-18", framework="jax",
+    #                    num_classes=1000),
+    # resnet34_flax=dict(module=FlaxResNetForImageClassification,
+    #                    model="microsoft/resnet-34", framework="jax",
+    #                    num_classes=1000),
     resnet50_flax=dict(module=FlaxResNetForImageClassification,
                        model="microsoft/resnet-50", framework="jax",
                        num_classes=1000),
-    resnet101_flax=dict(module=FlaxResNetForImageClassification,
-                        model="microsoft/resnet-101", framework="jax",
-                        num_classes=1000),
-    resnet152_flax=dict(module=FlaxResNetForImageClassification,
-                        model="microsoft/resnet-152", framework="jax",
-                        num_classes=1000),
+    # resnet101_flax=dict(module=FlaxResNetForImageClassification,
+    #                     model="microsoft/resnet-101", framework="jax",
+    #                     num_classes=1000),
+    # resnet152_flax=dict(module=FlaxResNetForImageClassification,
+    #                     model="microsoft/resnet-152", framework="jax",
+    #                     num_classes=1000),
     vit_flax=dict(module=FlaxViTForImageClassification,
                   model="google/vit-base-patch16-224", framework="jax",
                   num_classes=1000),
     bert_flax=dict(module=FlaxBertForSequenceClassification,
                    model="bert-base-uncased", framework="jax", num_classes=2),
-    resnet18_torch=dict(module=ResNetForImageClassification,
-                        model="microsoft/resnet-18", framework="torch",
-                        num_classes=1000),
-    resnet34_torch=dict(module=ResNetForImageClassification,
-                        model="microsoft/resnet-34", framework="torch",
-                        num_classes=1000),
+    # resnet18_torch=dict(module=ResNetForImageClassification,
+    #                     model="microsoft/resnet-18", framework="torch",
+    #                     num_classes=1000),
+    # resnet34_torch=dict(module=ResNetForImageClassification,
+    #                     model="microsoft/resnet-34", framework="torch",
+    #                     num_classes=1000),
     resnet50_torch=dict(module=ResNetForImageClassification,
                         model="microsoft/resnet-50", framework="torch",
                         num_classes=1000),
-    resnet101_torch=dict(module=ResNetForImageClassification,
-                         model="microsoft/resnet-101", framework="torch",
-                         num_classes=1000),
-    resnet152_torch=dict(module=ResNetForImageClassification,
-                         model="microsoft/resnet-152", framework="torch",
-                         num_classes=1000),
+    # resnet101_torch=dict(module=ResNetForImageClassification,
+    #                      model="microsoft/resnet-101", framework="torch",
+    #                      num_classes=1000),
+    # resnet152_torch=dict(module=ResNetForImageClassification,
+    #                      model="microsoft/resnet-152", framework="torch",
+    #                      num_classes=1000),
     vit_torch=dict(module=ViTForImageClassification,
                    model="google/vit-base-patch16-224", framework="torch",
                    num_classes=1000),
@@ -193,7 +193,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
         )
         replace_all_batch_norm_modules_(model)
         if use_gpu:
-            batch = {k: v.cuda() for k, v in batch.items()}
+            batch = {k: v.cuda() for k, v in batch.items() if v is not None}
             model = model.cuda()
         params = dict(model.named_parameters())
 
@@ -211,8 +211,8 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
     times = []
     memories = []
     for _ in range(n_reps):
+        memory = 0
         if fun_name == "grad":
-            memory = 0
             if framework == "jax":
                 start = perf_counter()
                 jax.block_until_ready(grad_fun(params))
@@ -222,7 +222,6 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
                 grad_fun(params)
                 time = perf_counter() - start
             times.append(time)
-            memories.append(memory)
         else:
             if framework == "jax":
                 start = perf_counter()
@@ -239,12 +238,13 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
                 grad_fun(params)
                 grad_time = perf_counter() - start
             times.append(time - grad_time)
+            memories.append(memory)
 
     return dict(
         model=model_name.split('_')[0],
         label=fun_name,
         time=times,
-        memory=memories,
+        # memory=memories,
         batch_size=batch_size,
         framework=framework,
         rep=jnp.arange(n_reps),
@@ -258,11 +258,14 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list,
     with open(slurm_config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    executor = submitit.AutoExecutor("bench_hvp")
+    executor = submitit.AutoExecutor("bench_hvp_log")
     executor.update_parameters(**config)
-    skip = [(128, 'resnet50_torch'),
+    skip = [(64, 'resnet50_torch'), (128, 'resnet50_torch'),
             (64, 'resnet101_torch'), (128, 'resnet101_torch'),
-            (64, 'resnet152_torch'), (128, 'resnet152_torch')]
+            (64, 'resnet152_torch'), (128, 'resnet152_torch'),
+            (128, 'vit_torch'), (128, 'vit_flax'),
+            (64, 'vit_torch'), (32, 'vit_torch'),
+            (64, 'bert_torch'), (128, 'bert_torch')]
 
     with executor.batch():
         jobs = [
@@ -327,7 +330,8 @@ def hvp_reverse_over_forward(model, batch, num_classes=1000, framework="jax"):
         )
     elif framework == 'torch':
         def jvp_fun(x, v):
-            return torch.func.jvp(loss_fn_torch, (x, ), (v, ))[1]
+            return torch.func.jvp(lambda y: loss_fn_torch(y, model, batch),
+                                  (x, ), (v, ))[1]
 
         def hvp_fun(x, v):
             return torch.func.grad(jvp_fun)(x, v)
@@ -355,7 +359,7 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
         def hvp_fun(x, v):
             return torch.func.grad(lambda x: sum(
                 torch.dot(a.ravel(), b.ravel())
-                for a, b in zip(grad_fun(x), v))
+                for a, b in zip(grad_fun(x).values(), v.values()))
             )(x)
 
     return hvp_fun
