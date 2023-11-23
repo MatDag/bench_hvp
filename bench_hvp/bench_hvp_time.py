@@ -353,7 +353,7 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
     return hvp_fun
 
 
-def torch_hvp(model, batch, num_classes=1000):
+def torch_hvp(model, batch, num_classes=1000, framework="torch"):
     """
     Returns the Hessian-vector product operator that uses reverse-over-reverse
     propagation.
@@ -368,7 +368,7 @@ def torch_hvp(model, batch, num_classes=1000):
                                                       v=v.values())[1]
 
 
-def torch_vhp(model, batch, num_classes=1000):
+def torch_vhp(model, batch, num_classes=1000, framework="torch"):
     """
     Returns the Hessian-vector product operator that uses reverse-over-reverse
     propagation.
@@ -388,7 +388,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--framework', '-f', type=str, default='jax',
                         choices=['jax', 'torch'])
+    parser.add_argument('--n_reps', '-n', type=int, default=100)
+    parser.add_argument('--config', '-c', type=str, default=SLURM_CONFIG)
+
     framework = parser.parse_args().framework
+    N_REPS = parser.parse_args().n_reps
+    SLURM_CONFIG = parser.parse_args().config
+
     fun_dict = dict(
         grad=dict(fun=None, label="Gradient"),
         hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
