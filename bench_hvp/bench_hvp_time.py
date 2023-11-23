@@ -409,4 +409,4 @@ if __name__ == '__main__':
     df = run_bench(fun_list, model_list, n_reps=N_REPS,
                    batch_size_list=BATCH_SIZE_LIST,
                    slurm_config_path=SLURM_CONFIG)
-    df.to_parquet(f'../outputs/bench_hvp_neural_network_{framework}.parquet')
+    df.to_parquet(f'../outputs/bench_hvp_time_{framework}.parquet')
