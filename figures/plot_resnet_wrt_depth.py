@@ -1,13 +1,9 @@
-<<<<<<< HEAD
 import numpy as np
-=======
->>>>>>> main
 import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-<<<<<<< HEAD
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 
 LEGEND_INSIDE = True
 LEGEND_RATIO = 0.1
@@ -15,14 +11,6 @@ DEFAULT_WIDTH = 8
 DEFAULT_HEIGHT = 5
 
 fontsize = 7
-=======
-BATCH_SIZE = 128
-
-LEGEND_RATIO = 0.1
-DEFAULT_WIDTH = 7
-DEFAULT_DOUBLE_WIDTH = 6.75
-DEFAULT_HEIGHT = 3
->>>>>>> main
 
 STYLES = dict(
     grad=dict(label='Gradient', color='#5778a4'),
@@ -40,12 +28,10 @@ FRAMEWORK = dict(
 )
 
 MODELS = dict(
-    resnet18=dict(label="ResNet18", ord=1),
-    resnet34=dict(label="ResNet34", ord=2),
     resnet50=dict(label="ResNet50", ord=3),
-    resnet101=dict(label="ResNet101", ord=4),
-    resnet152=dict(label="ResNet152", ord=5),
-    # resnet200=dict(label="ResNet200", ord=6),
+    vit=dict(label="ViT", ord=6),
+    bert=dict(label="BERT", ord=7),
+
 )
 
 mpl.rcParams.update({
@@ -58,17 +44,12 @@ mpl.rcParams.update({
 
 df = pd.concat(
     [
-        pd.read_parquet('../outputs/bench_resnet_jax.parquet')
+        pd.read_parquet('../outputs/bench_hvp_neural_network_jax.parquet')
         .query("batch_size == @BATCH_SIZE"),
-        pd.read_parquet('../outputs/bench_resnet_torch.parquet')
+        pd.read_parquet('../outputs/bench_hvp_neural_network_torch.parquet')
         .query("batch_size == @BATCH_SIZE")
     ]
 )
-
-df['model'] = df['model'].apply(
-    lambda x: x[:-5] if x.endswith('_flax') else x[:-6]
-)
-
 
 for model in MODELS:
     df.loc[df['model'] == model, 'ord'] = MODELS[model]['ord']

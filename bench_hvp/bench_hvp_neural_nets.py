@@ -11,7 +11,6 @@ import pandas as pd
 from functools import partial
 
 from time import perf_counter
-
 import yaml
 import submitit
 import itertools
@@ -32,44 +31,20 @@ import utils
 from joblib import Memory
 mem = Memory(location='__cache__')
 
-N_REPS = 10
+N_REPS = 100
 BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
-    # resnet18_flax=dict(module=FlaxResNetForImageClassification,
-    #                    model="microsoft/resnet-18", framework="jax",
-    #                    num_classes=1000),
-    # resnet34_flax=dict(module=FlaxResNetForImageClassification,
-    #                    model="microsoft/resnet-34", framework="jax",
-    #                    num_classes=1000),
     resnet50_flax=dict(module=FlaxResNetForImageClassification,
                        model="microsoft/resnet-50", framework="jax",
                        num_classes=1000),
-    # resnet101_flax=dict(module=FlaxResNetForImageClassification,
-    #                     model="microsoft/resnet-101", framework="jax",
-    #                     num_classes=1000),
-    # resnet152_flax=dict(module=FlaxResNetForImageClassification,
-    #                     model="microsoft/resnet-152", framework="jax",
-    #                     num_classes=1000),
     vit_flax=dict(module=FlaxViTForImageClassification,
                   model="google/vit-base-patch16-224", framework="jax",
                   num_classes=1000),
     bert_flax=dict(module=FlaxBertForSequenceClassification,
                    model="bert-base-uncased", framework="jax", num_classes=2),
-    # resnet18_torch=dict(module=ResNetForImageClassification,
-    #                     model="microsoft/resnet-18", framework="torch",
-    #                     num_classes=1000),
-    # resnet34_torch=dict(module=ResNetForImageClassification,
-    #                     model="microsoft/resnet-34", framework="torch",
-    #                     num_classes=1000),
     resnet50_torch=dict(module=ResNetForImageClassification,
                         model="microsoft/resnet-50", framework="torch",
                         num_classes=1000),
-    # resnet101_torch=dict(module=ResNetForImageClassification,
-    #                      model="microsoft/resnet-101", framework="torch",
-    #                      num_classes=1000),
-    # resnet152_torch=dict(module=ResNetForImageClassification,
-    #                      model="microsoft/resnet-152", framework="torch",
-    #                      num_classes=1000),
     vit_torch=dict(module=ViTForImageClassification,
                    model="google/vit-base-patch16-224", framework="torch",
                    num_classes=1000),
@@ -200,18 +175,23 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
         def grad_fun(x):
             return torch.func.grad(loss_fn_torch)(x, model, batch)
 
+    # We compute the quantities a first time for computation
     if fun_name == "grad":
-        grad_fun(params)  # First run for compilation
+        if framework == "jax":
+            jax.block_until_ready(grad_fun(params))
+        else:
+            grad_fun(params)
     else:
-        v = grad_fun(params)  # First run to get a v and for compilation
+        v = grad_fun(params)
         hvp_fun = fun_dict[fun_name]['fun'](model, batch,
                                             num_classes=num_classes,
                                             framework=framework)
-        hvp_fun(params, v)  # First run for compilation
+        if framework == "jax":
+            jax.block_until_ready(hvp_fun(params, v))
+        else:
+            hvp_fun(params, v)
     times = []
-    memories = []
     for _ in range(n_reps):
-        memory = 0
         if fun_name == "grad":
             if framework == "jax":
                 start = perf_counter()
@@ -238,13 +218,11 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
                 grad_fun(params)
                 grad_time = perf_counter() - start
             times.append(time - grad_time)
-            memories.append(memory)
 
     return dict(
         model=model_name.split('_')[0],
-        label=fun_name,
+        fun=fun_name,
         time=times,
-        # memory=memories,
         batch_size=batch_size,
         framework=framework,
         rep=jnp.arange(n_reps),
@@ -275,8 +253,18 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list,
                             batch_size)
             for fun_name, model_name, batch_size
             in itertools.product(fun_list, model_list, batch_size_list)
-            if (batch_size, model_name) not in skip
+            if ((batch_size, model_name) not in skip
+                and fun_name != "hvp_reverse_over_reverse")
         ]
+
+        jobs += [
+            executor.submit(run,
+                            "hvp_reverse_over_reverse",
+                            model_name,
+                            32)
+            for model_name in model_list if (32, model_name) not in skip
+        ]
+
     print(f"First job ID: {jobs[0].job_id}")
 
     for t in progress.track(as_completed(jobs), total=len(jobs)):
@@ -365,6 +353,36 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
     return hvp_fun
 
 
+def torch_hvp(model, batch, num_classes=1000):
+    """
+    Returns the Hessian-vector product operator that uses reverse-over-reverse
+    propagation.
+    """
+
+    f = torch.compile(
+        lambda *x: loss_fn_torch({k: v for k, v in x.items()}, model, batch)
+    )
+
+    return lambda x, v: torch.autograd.functional.hvp(f(x),
+                                                      tuple(x.values()),
+                                                      v=v.values())[1]
+
+
+def torch_vhp(model, batch, num_classes=1000):
+    """
+    Returns the Hessian-vector product operator that uses reverse-over-reverse
+    propagation.
+    """
+
+    f = torch.compile(
+        lambda *x: loss_fn_torch({k: v for k, v in x.items()}, model, batch)
+    )
+
+    return lambda x, v: torch.autograd.functional.vhp(f(x),
+                                                      tuple(x.values()),
+                                                      v=v.values())[1]
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
@@ -380,6 +398,11 @@ if __name__ == '__main__':
         hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
                                       label="HVP reverse-over-reverse"),
     )
+    if framework == "torch":
+        fun_dict.update(
+            torch_hvp=dict(fun=torch_hvp, label="HVP reverse-over-reverse"),
+            torch_vhp=dict(fun=torch_vhp, label="HVP reverse-over-reverse"),
+        )
     model_list = [k for k in MODEL_DICT.keys()
                   if MODEL_DICT[k]['framework'] == framework]
     fun_list = fun_dict.keys()
