@@ -7,14 +7,15 @@ from flax.training import common_utils
 import torch
 from functorch.experimental import replace_all_batch_norm_modules_
 
+import numpy as np
 import pandas as pd
 from functools import partial
 
-from time import perf_counter
 import yaml
 import submitit
 import itertools
 from rich import progress
+from time import perf_counter
 from submitit.helpers import as_completed
 
 from transformers import ViTForImageClassification
@@ -27,6 +28,7 @@ from transformers import BertForSequenceClassification
 from transformers import FlaxBertForSequenceClassification
 
 import utils
+
 
 from joblib import Memory
 mem = Memory(location='__cache__')
@@ -141,6 +143,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
                                             num_classes=num_classes)
         )
     elif framework == "torch":
+        torch._dynamo.config.suppress_errors = True
         use_gpu = torch.cuda.is_available()
         gen = torch.Generator().manual_seed(0)
         if model_name != "bert_torch":
@@ -172,8 +175,12 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
             model = model.cuda()
         params = dict(model.named_parameters())
 
+        @torch.compile
         def grad_fun(x):
-            return torch.func.grad(loss_fn_torch)(x, model, batch)
+            def f(x):
+                return loss_fn_torch(x, model, batch)
+            output = f(x)
+            return torch.autograd.grad(output, tuple(params.values()))
 
     # We compute the quantities a first time for computation
     if fun_name == "grad":
@@ -183,13 +190,14 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
             grad_fun(params)
     else:
         v = grad_fun(params)
-        hvp_fun = fun_dict[fun_name]['fun'](model, batch,
-                                            num_classes=num_classes,
-                                            framework=framework)
+        hvp_fun = fun_dict[fun_name](model, batch,
+                                     num_classes=num_classes,
+                                     framework=framework)
         if framework == "jax":
             jax.block_until_ready(hvp_fun(params, v))
         else:
             hvp_fun(params, v)
+
     times = []
     for _ in range(n_reps):
         if fun_name == "grad":
@@ -225,7 +233,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
         time=times,
         batch_size=batch_size,
         framework=framework,
-        rep=jnp.arange(n_reps),
+        rep=np.arange(n_reps),
     )
 
 
@@ -292,10 +300,15 @@ def hvp_forward_over_reverse(model, batch, num_classes=1000, framework="jax"):
             lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
         )
     elif framework == "torch":
-        def grad_fun(x):
-            return torch.func.grad(loss_fn_torch)(x, model, batch)
+        def f(x):
+            return loss_fn_torch(x, model, batch)
 
+        def grad_fun(x):
+            return torch.func.grad(f)(x)
+
+        @torch.compile
         def hvp_fun(x, v):
+            v = {k: value for k, value in zip(x.keys(), v)}
             return torch.func.jvp(grad_fun, (x, ), (v, ))[1]
     return hvp_fun
 
@@ -317,11 +330,16 @@ def hvp_reverse_over_forward(model, batch, num_classes=1000, framework="jax"):
             lambda x, v: jax.grad(jvp_fun)(x, v)
         )
     elif framework == 'torch':
+        def f(x):
+            return loss_fn_torch(x, model, batch)
+
         def jvp_fun(x, v):
-            return torch.func.jvp(lambda y: loss_fn_torch(y, model, batch),
+            return torch.func.jvp(lambda y: f(y),
                                   (x, ), (v, ))[1]
 
+        @torch.compile
         def hvp_fun(x, v):
+            v = {k: value for k, value in zip(x.keys(), v)}
             return torch.func.grad(jvp_fun)(x, v)
 
     return hvp_fun
@@ -341,10 +359,15 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
             lambda x, v: jax.grad(lambda x: utils.tree_dot(grad_fun(x), v))(x)
         )
     elif framework == 'torch':
+        def f(x):
+            return loss_fn_torch(x, model, batch)
+
         def grad_fun(x):
             return torch.func.grad(loss_fn_torch)(x, model, batch)
 
+        @torch.compile
         def hvp_fun(x, v):
+            v = {k: value for k, value in zip(x.keys(), v)}
             return torch.func.grad(lambda x: sum(
                 torch.dot(a.ravel(), b.ravel())
                 for a, b in zip(grad_fun(x).values(), v.values()))
@@ -358,14 +381,15 @@ def torch_hvp(model, batch, num_classes=1000, framework="torch"):
     Returns the Hessian-vector product operator that uses reverse-over-reverse
     propagation.
     """
+    keys = dict(model.named_parameters()).keys()
 
-    f = torch.compile(
-        lambda *x: loss_fn_torch({k: v for k, v in x.items()}, model, batch)
-    )
+    def f(*x):
+        return loss_fn_torch({k: v for k, v in zip(keys, x)}, model, batch)
 
-    return lambda x, v: torch.autograd.functional.hvp(f(x),
-                                                      tuple(x.values()),
-                                                      v=v.values())[1]
+    return torch.compile(
+        lambda x, v: torch.autograd.functional.vhp(f, tuple(x.values()),
+                                                   v=v)[1]
+        )
 
 
 def torch_vhp(model, batch, num_classes=1000, framework="torch"):
@@ -373,14 +397,15 @@ def torch_vhp(model, batch, num_classes=1000, framework="torch"):
     Returns the Hessian-vector product operator that uses reverse-over-reverse
     propagation.
     """
+    keys = dict(model.named_parameters()).keys()
 
-    f = torch.compile(
-        lambda *x: loss_fn_torch({k: v for k, v in x.items()}, model, batch)
-    )
+    def f(*x):
+        return loss_fn_torch({k: v for k, v in zip(keys, x)}, model, batch)
 
-    return lambda x, v: torch.autograd.functional.vhp(f(x),
-                                                      tuple(x.values()),
-                                                      v=v.values())[1]
+    return torch.compile(
+        lambda x, v: torch.autograd.functional.vhp(f, tuple(x.values()),
+                                                   v=v)[1]
+        )
 
 
 if __name__ == '__main__':
@@ -397,21 +422,19 @@ if __name__ == '__main__':
 
     fun_dict = dict(
         grad=dict(fun=None, label="Gradient"),
-        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
-                                      label="HVP forward-over-reverse"),
-        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
-                                      label="HVP reverse-over-forward"),
-        hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
-                                      label="HVP reverse-over-reverse"),
+        hvp_forward_over_reverse=hvp_forward_over_reverse,
+        hvp_reverse_over_forward=hvp_reverse_over_forward,
+        hvp_reverse_over_reverse=hvp_reverse_over_reverse,
     )
     if framework == "torch":
         fun_dict.update(
-            torch_hvp=dict(fun=torch_hvp, label="HVP reverse-over-reverse"),
-            torch_vhp=dict(fun=torch_vhp, label="HVP reverse-over-reverse"),
+            torch_hvp=torch_hvp,
+            torch_vhp=torch_vhp,
         )
     model_list = [k for k in MODEL_DICT.keys()
                   if MODEL_DICT[k]['framework'] == framework]
     fun_list = fun_dict.keys()
+
     df = run_bench(fun_list, model_list, n_reps=N_REPS,
                    batch_size_list=BATCH_SIZE_LIST,
                    slurm_config_path=SLURM_CONFIG)
