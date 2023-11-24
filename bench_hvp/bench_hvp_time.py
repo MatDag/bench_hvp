@@ -29,7 +29,6 @@ from transformers import FlaxBertForSequenceClassification
 
 import utils
 
-
 from joblib import Memory
 mem = Memory(location='__cache__')
 
