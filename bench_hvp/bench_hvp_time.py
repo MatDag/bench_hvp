@@ -32,7 +32,7 @@ import utils
 from joblib import Memory
 mem = Memory(location='__cache__')
 
-N_REPS = 100
+N_REPS = 30
 BATCH_SIZE_LIST = [16, 32, 64, 128]
 MODEL_DICT = dict(
     resnet50_flax=dict(module=FlaxResNetForImageClassification,
@@ -142,7 +142,6 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
                                             num_classes=num_classes)
         )
     elif framework == "torch":
-        torch._dynamo.config.suppress_errors = True
         use_gpu = torch.cuda.is_available()
         gen = torch.Generator().manual_seed(0)
         if model_name != "bert_torch":
@@ -174,7 +173,6 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
             model = model.cuda()
         params = dict(model.named_parameters())
 
-        @torch.compile
         def grad_fun(x):
             def f(x):
                 return loss_fn_torch(x, model, batch)
@@ -224,8 +222,8 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
                 start = perf_counter()
                 grad_fun(params)
                 grad_time = perf_counter() - start
-            times.append(time - grad_time)
 
+            times.append(time - grad_time)
     return dict(
         model=model_name.split('_')[0],
         fun=fun_name,
@@ -305,7 +303,6 @@ def hvp_forward_over_reverse(model, batch, num_classes=1000, framework="jax"):
         def grad_fun(x):
             return torch.func.grad(f)(x)
 
-        @torch.compile
         def hvp_fun(x, v):
             v = {k: value for k, value in zip(x.keys(), v)}
             return torch.func.jvp(grad_fun, (x, ), (v, ))[1]
@@ -336,7 +333,6 @@ def hvp_reverse_over_forward(model, batch, num_classes=1000, framework="jax"):
             return torch.func.jvp(lambda y: f(y),
                                   (x, ), (v, ))[1]
 
-        @torch.compile
         def hvp_fun(x, v):
             v = {k: value for k, value in zip(x.keys(), v)}
             return torch.func.grad(jvp_fun)(x, v)
@@ -364,7 +360,6 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
         def grad_fun(x):
             return torch.func.grad(loss_fn_torch)(x, model, batch)
 
-        @torch.compile
         def hvp_fun(x, v):
             v = {k: value for k, value in zip(x.keys(), v)}
             return torch.func.grad(lambda x: sum(
@@ -385,10 +380,8 @@ def torch_hvp(model, batch, num_classes=1000, framework="torch"):
     def f(*x):
         return loss_fn_torch({k: v for k, v in zip(keys, x)}, model, batch)
 
-    return torch.compile(
-        lambda x, v: torch.autograd.functional.vhp(f, tuple(x.values()),
-                                                   v=v)[1]
-        )
+    return lambda x, v: torch.autograd.functional.vhp(f, tuple(x.values()),
+                                                      v=v)[1]
 
 
 def torch_vhp(model, batch, num_classes=1000, framework="torch"):
@@ -401,10 +394,8 @@ def torch_vhp(model, batch, num_classes=1000, framework="torch"):
     def f(*x):
         return loss_fn_torch({k: v for k, v in zip(keys, x)}, model, batch)
 
-    return torch.compile(
-        lambda x, v: torch.autograd.functional.vhp(f, tuple(x.values()),
-                                                   v=v)[1]
-        )
+    return lambda x, v: torch.autograd.functional.vhp(f, tuple(x.values()),
+                                                      v=v)[1]
 
 
 if __name__ == '__main__':
