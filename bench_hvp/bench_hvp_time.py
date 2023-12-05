@@ -35,6 +35,9 @@ mem = Memory(location='__cache__')
 N_REPS = 30
 BATCH_SIZE_LIST = [1, 2, 4, 8, 16, 32, 64, 128]
 MODEL_DICT = dict(
+    resnet34_flax=dict(module=FlaxResNetForImageClassification,
+                       model="microsoft/resnet-34", framework="jax",
+                       num_classes=1000),
     resnet50_flax=dict(module=FlaxResNetForImageClassification,
                        model="microsoft/resnet-50", framework="jax",
                        num_classes=1000),
@@ -43,6 +46,9 @@ MODEL_DICT = dict(
                   num_classes=1000),
     bert_flax=dict(module=FlaxBertForSequenceClassification,
                    model="bert-base-uncased", framework="jax", num_classes=2),
+    resnet34_torch=dict(module=ResNetForImageClassification,
+                        model="microsoft/resnet-34", framework="torch",
+                        num_classes=1000),
     resnet50_torch=dict(module=ResNetForImageClassification,
                         model="microsoft/resnet-50", framework="torch",
                         num_classes=1000),
@@ -195,6 +201,8 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
             hvp_fun(params, v)
 
     times = []
+    if framework == "torch":
+        torch.cuda.synchronize()
     for _ in range(n_reps):
         if fun_name == "grad":
             if framework == "jax":
@@ -204,6 +212,7 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
             elif framework == "torch":
                 start = perf_counter()
                 grad_fun(params)
+                torch.cuda.synchronize()
                 time = perf_counter() - start
             times.append(time)
         else:
@@ -217,9 +226,11 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
             elif framework == "torch":
                 start = perf_counter()
                 hvp_fun(params, v)
+                torch.cuda.synchronize()
                 time = perf_counter() - start
                 start = perf_counter()
                 grad_fun(params)
+                torch.cuda.synchronize()
                 grad_time = perf_counter() - start
 
             times.append(time - grad_time)
@@ -242,11 +253,11 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list,
 
     executor = submitit.AutoExecutor("bench_hvp_log")
     executor.update_parameters(**config)
-    # skip = [(64, 'resnet50_torch'), (128, 'resnet50_torch'),
-    #         (128, 'vit_torch'), (128, 'vit_flax'),
-    #         (64, 'vit_torch'), (32, 'vit_torch'),
-    #         (64, 'bert_torch'), (128, 'bert_torch')]
-    skip = []
+    skip = [(64, 'resnet50_torch'), (128, 'resnet50_torch'),
+            (128, 'resnet34_torch'),
+            (128, 'vit_torch'), (128, 'vit_flax'),
+            (64, 'vit_torch'), (32, 'vit_torch'),
+            (64, 'bert_torch'), (128, 'bert_torch')]
 
     with executor.batch():
         jobs = [
@@ -277,6 +288,7 @@ def run_bench(fun_list, model_list, n_reps, batch_size_list,
             raise exc
 
     results = [t.result() for t in jobs]
+
     return pd.concat([pd.DataFrame(res) for res in results])
 
 
