@@ -7,17 +7,6 @@ from flax.training import common_utils
 import torch
 from functorch.experimental import replace_all_batch_norm_modules_
 
-import numpy as np
-import pandas as pd
-from functools import partial
-
-import yaml
-import submitit
-import itertools
-from rich import progress
-from time import perf_counter
-from submitit.helpers import as_completed
-
 from transformers import ViTForImageClassification
 from transformers import FlaxViTForImageClassification
 
@@ -27,30 +16,31 @@ from transformers import FlaxResNetForImageClassification
 from transformers import BertForSequenceClassification
 from transformers import FlaxBertForSequenceClassification
 
+from memory_monitor import GPUMemoryMonitor
+
 import utils
 
-from joblib import Memory
-mem = Memory(location='__cache__')
+import os
 
-N_REPS = 30
-BATCH_SIZE_LIST = [1, 2, 4, 8, 16, 32, 64, 128]
+import pandas as pd
+
 MODEL_DICT = dict(
-    resnet34_flax=dict(module=FlaxResNetForImageClassification,
-                       model="microsoft/resnet-34", framework="jax",
-                       num_classes=1000),
     resnet50_flax=dict(module=FlaxResNetForImageClassification,
                        model="microsoft/resnet-50", framework="jax",
+                       num_classes=1000),
+    resnet34_flax=dict(module=FlaxResNetForImageClassification,
+                       model="microsoft/resnet-34", framework="jax",
                        num_classes=1000),
     vit_flax=dict(module=FlaxViTForImageClassification,
                   model="google/vit-base-patch16-224", framework="jax",
                   num_classes=1000),
     bert_flax=dict(module=FlaxBertForSequenceClassification,
                    model="bert-base-uncased", framework="jax", num_classes=2),
-    resnet34_torch=dict(module=ResNetForImageClassification,
-                        model="microsoft/resnet-34", framework="torch",
-                        num_classes=1000),
     resnet50_torch=dict(module=ResNetForImageClassification,
                         model="microsoft/resnet-50", framework="torch",
+                        num_classes=1000),
+    resnet34_torch=dict(module=ResNetForImageClassification,
+                        model="microsoft/resnet-34", framework="torch",
                         num_classes=1000),
     vit_torch=dict(module=ViTForImageClassification,
                    model="google/vit-base-patch16-224", framework="torch",
@@ -59,7 +49,6 @@ MODEL_DICT = dict(
                     model="bert-base-uncased", framework="torch",
                     num_classes=2),
 )
-SLURM_CONFIG = 'config/slurm.yml'
 
 
 def cross_entropy_loss(logits, labels, num_classes=1000):
@@ -105,8 +94,7 @@ def loss_fn_torch(params, model, batch):
     return loss + weight_penalty
 
 
-@mem.cache
-def run_one(fun_name, model_name, batch_size=16, n_reps=1):
+def run_one(fun_name, model_name, batch_size=16):
     framework = MODEL_DICT[model_name]['framework']
     num_classes = MODEL_DICT[model_name]['num_classes']
     if framework == "jax":
@@ -143,10 +131,6 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
         params = model.params
         if "params" not in params.keys():
             params = {"params": params}
-        grad_fun = jax.jit(
-            lambda x: jax.grad(loss_fn_jax)(x, model, batch,
-                                            num_classes=num_classes)
-        )
     elif framework == "torch":
         use_gpu = torch.cuda.is_available()
         gen = torch.Generator().manual_seed(0)
@@ -179,116 +163,41 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
             model = model.cuda()
         params = dict(model.named_parameters())
 
-        def grad_fun(x):
-            def f(y):
-                return loss_fn_torch(y, model, batch)
-            return torch.func.grad(f)(x)
-
-    # We compute the quantities a first time for computation
+    if fun_name != "grad":
+        v = params.copy()
+    monitor = GPUMemoryMonitor()
+    fun = fun_dict[fun_name]['fun'](model, batch,
+                                    num_classes=num_classes,
+                                    framework=framework)
     if fun_name == "grad":
         if framework == "jax":
-            jax.block_until_ready(grad_fun(params))
+            jax.block_until_ready(fun(params))
         else:
-            grad_fun(params)
+            fun(params)
     else:
-        v = grad_fun(params)
-        hvp_fun = fun_dict[fun_name](model, batch,
-                                     num_classes=num_classes,
-                                     framework=framework)
         if framework == "jax":
-            jax.block_until_ready(hvp_fun(params, v))
+            jax.block_until_ready(fun(params, v))
         else:
-            hvp_fun(params, v)
+            fun(params, v)
+    monitor.join()
+    memory = max(monitor.memory_buffer)
 
-    times = []
-    if framework == "torch":
-        torch.cuda.synchronize()
-    for _ in range(n_reps):
-        if fun_name == "grad":
-            if framework == "jax":
-                start = perf_counter()
-                jax.block_until_ready(grad_fun(params))
-                time = perf_counter() - start
-            elif framework == "torch":
-                start = perf_counter()
-                grad_fun(params)
-                torch.cuda.synchronize()
-                time = perf_counter() - start
-            times.append(time)
-        else:
-            if framework == "jax":
-                start = perf_counter()
-                jax.block_until_ready(hvp_fun(params, v))
-                time = perf_counter() - start
-                start = perf_counter()
-                jax.block_until_ready(grad_fun(params))
-                grad_time = perf_counter() - start
-            elif framework == "torch":
-                start = perf_counter()
-                hvp_fun(params, v)
-                torch.cuda.synchronize()
-                time = perf_counter() - start
-                start = perf_counter()
-                grad_fun(params)
-                torch.cuda.synchronize()
-                grad_time = perf_counter() - start
-
-            times.append(time - grad_time)
-    return dict(
-        model=model_name.split('_')[0],
-        fun=fun_name,
-        time=times,
-        batch_size=batch_size,
-        framework=framework,
-        rep=np.arange(n_reps),
-    )
+    return memory
 
 
-def run_bench(fun_list, model_list, n_reps, batch_size_list,
-              slurm_config_path=None):
-    run = partial(run_one, n_reps=n_reps)
-
-    with open(slurm_config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    executor = submitit.AutoExecutor("bench_hvp_log")
-    executor.update_parameters(**config)
-    skip = [(64, 'resnet50_torch'), (128, 'resnet50_torch'),
-            (128, 'resnet34_torch'),
-            (128, 'vit_torch'), (128, 'vit_flax'),
-            (64, 'vit_torch'), (32, 'vit_torch'),
-            (64, 'bert_torch'), (128, 'bert_torch')]
-
-    with executor.batch():
-        jobs = [
-            executor.submit(run,
-                            fun_name,
-                            model_name,
-                            batch_size)
-            for fun_name, model_name, batch_size
-            in itertools.product(fun_list, model_list, batch_size_list)
-            if ((batch_size, model_name) not in skip)
-        ]
-
-        # jobs += [
-        #     executor.submit(run,
-        #                     "hvp_reverse_over_reverse",
-        #                     model_name,
-        #                     32)
-        #     for model_name in model_list if (32, model_name) not in skip
-        # ]
-
-    print(f"First job ID: {jobs[0].job_id}")
-
-    for t in progress.track(as_completed(jobs), total=len(jobs)):
-        exc = t.exception()
-        if exc is not None:
-            for tt in jobs:
-                tt.cancel()
-            raise exc
-
-    results = [t.result() for t in jobs]
-    return pd.concat([pd.DataFrame(res) for res in results])
+def grad_fun(model, batch, num_classes=1000, framework="jax"):
+    """
+    Returns the gradient operator.
+    """
+    if framework == "jax":
+        grad_fun = jax.jit(
+            lambda x: jax.grad(loss_fn_jax)(x, model, batch,
+                                            num_classes=num_classes)
+        )
+    elif framework == "torch":
+        def grad_fun(x):
+            return torch.func.grad(loss_fn_torch)(x, model, batch)
+    return grad_fun
 
 
 def hvp_forward_over_reverse(model, batch, num_classes=1000, framework="jax"):
@@ -305,11 +214,8 @@ def hvp_forward_over_reverse(model, batch, num_classes=1000, framework="jax"):
             lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
         )
     elif framework == "torch":
-        def f(x):
-            return loss_fn_torch(x, model, batch)
-
         def grad_fun(x):
-            return torch.func.grad(f)(x)
+            return torch.func.grad(loss_fn_torch)(x, model, batch)
 
         def hvp_fun(x, v):
             return torch.func.jvp(grad_fun, (x, ), (v, ))[1]
@@ -327,17 +233,13 @@ def hvp_reverse_over_forward(model, batch, num_classes=1000, framework="jax"):
                 lambda y: loss_fn_jax(y, model, batch,
                                       num_classes=num_classes),
                 (x, ), (v, )
-            )[1]
-        )
+            )[1])
         hvp_fun = jax.jit(
             lambda x, v: jax.grad(jvp_fun)(x, v)
         )
     elif framework == 'torch':
-        def f(x):
-            return loss_fn_torch(x, model, batch)
-
         def jvp_fun(x, v):
-            return torch.func.jvp(f,
+            return torch.func.jvp(lambda y: loss_fn_torch(y, model, batch),
                                   (x, ), (v, ))[1]
 
         def hvp_fun(x, v):
@@ -357,19 +259,16 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
                                             num_classes=num_classes)
         )
         hvp_fun = jax.jit(
-            lambda x, v: jax.grad(lambda y: utils.tree_dot(grad_fun(y), v))(x)
+            lambda x, v: jax.grad(lambda x: utils.tree_dot(grad_fun(x), v))(x)
         )
     elif framework == 'torch':
-        def f(x):
-            return loss_fn_torch(x, model, batch)
-
         def grad_fun(x):
             return torch.func.grad(loss_fn_torch)(x, model, batch)
 
         def hvp_fun(x, v):
-            return torch.func.grad(lambda y: sum(
+            return torch.func.grad(lambda x: sum(
                 torch.dot(a.ravel(), b.ravel())
-                for a, b in zip(grad_fun(y).values(), v.values()))
+                for a, b in zip(grad_fun(x).values(), v.values()))
             )(x)
 
     return hvp_fun
@@ -380,24 +279,49 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--framework', '-f', type=str, default='jax',
                         choices=['jax', 'torch'])
-    parser.add_argument('--n_reps', '-n', type=int, default=100)
-    parser.add_argument('--config', '-c', type=str, default=SLURM_CONFIG)
+    parser.add_argument('--fun', type=str, default='grad',
+                        choices=['grad', 'hvp_forward_over_reverse',
+                                 'hvp_reverse_over_forward',
+                                 'hvp_reverse_over_reverse'])
+    parser.add_argument('--model', '-m', type=str, default='resnet50_flax')
+    parser.add_argument('--batch_size', '-b', type=int, default=16)
 
     framework = parser.parse_args().framework
-    N_REPS = parser.parse_args().n_reps
-    SLURM_CONFIG = parser.parse_args().config
+    fun_name = parser.parse_args().fun
+    model_name = parser.parse_args().model
+    batch_size = parser.parse_args().batch_size
 
     fun_dict = dict(
-        grad=dict(fun=None, label="Gradient"),
-        hvp_forward_over_reverse=hvp_forward_over_reverse,
-        hvp_reverse_over_forward=hvp_reverse_over_forward,
-        hvp_reverse_over_reverse=hvp_reverse_over_reverse,
+        grad=dict(fun=grad_fun, label="Gradient"),
+        hvp_forward_over_reverse=dict(fun=hvp_forward_over_reverse,
+                                      label="HVP forward-over-reverse"),
+        hvp_reverse_over_forward=dict(fun=hvp_reverse_over_forward,
+                                      label="HVP reverse-over-forward"),
+        hvp_reverse_over_reverse=dict(fun=hvp_reverse_over_reverse,
+                                      label="HVP reverse-over-reverse"),
     )
     model_list = [k for k in MODEL_DICT.keys()
                   if MODEL_DICT[k]['framework'] == framework]
-    fun_list = fun_dict.keys()
 
-    df = run_bench(fun_list, model_list, n_reps=N_REPS,
-                   batch_size_list=BATCH_SIZE_LIST,
-                   slurm_config_path=SLURM_CONFIG)
-    df.to_parquet(f'../outputs/bench_hvp_time_{framework}.parquet')
+    print(f'Running {fun_dict[fun_name]["label"]} on {model_name} ' +
+          f'with batch size {batch_size}.')
+
+    memory = run_one(fun_name, model_name, batch_size)
+    memory /= 1024**2
+    print(f"Peak memory usage: {memory:.2f} MiB")
+    if os.path.exists(f'../outputs/bench_hvp_memory_{framework}.parquet'):
+        df = pd.read_parquet(
+            f'../outputs/bench_hvp_memory_{framework}.parquet'
+        )
+        df.loc[
+            (model_name.split('_')[0], fun_name, batch_size), 'memory'
+        ] = memory
+    else:
+        df = pd.DataFrame(dict(
+            model=[model_name.split('_')[0]],
+            fun=[fun_name],
+            batch_size=[batch_size],
+            memory=[memory]
+        )).set_index(['model', 'fun', 'batch_size'])
+
+    df.to_parquet(f'../outputs/bench_hvp_memory_{framework}.parquet')
