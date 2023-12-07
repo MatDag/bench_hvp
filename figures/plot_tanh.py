@@ -17,11 +17,7 @@ STYLES = dict(
                                   color='#e7ca60'),
     hvp_reverse_over_reverse=dict(label='HVP reverse-over-reverse',
                                   color='#d1615d'),
-<<<<<<< HEAD
-    # hvp_naive=dict(label='HVP naive', color='#5778a4')
-=======
     hvp_naive=dict(label='HVP naive', color='#5778a4')
->>>>>>> main
 )
 
 
@@ -33,11 +29,7 @@ mpl.rcParams.update({
     'ytick.labelsize': 'small'
 })
 
-<<<<<<< HEAD
-df = pd.read_parquet('../outputs/bench_tanh.parquet')
-=======
 df = pd.read_parquet('../outputs/bench_tanh2.parquet')
->>>>>>> main
 
 
 fig = plt.figure(

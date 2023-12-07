@@ -11,12 +11,8 @@ import numpy as np
 import pandas as pd
 from functools import partial
 
-import yaml
-import submitit
 import itertools
-from rich import progress
 from time import perf_counter
-from submitit.helpers import as_completed
 
 from transformers import ViTForImageClassification
 from transformers import FlaxViTForImageClassification
@@ -32,8 +28,6 @@ import utils
 from joblib import Memory
 mem = Memory(location='__cache__')
 
-N_REPS = 30
-BATCH_SIZE_LIST = [1, 2, 4, 8, 16, 32, 64, 128]
 MODEL_DICT = dict(
     resnet34_flax=dict(module=FlaxResNetForImageClassification,
                        model="microsoft/resnet-34", framework="jax",
@@ -106,7 +100,7 @@ def loss_fn_torch(params, model, batch):
 
 
 @mem.cache
-def run_one(fun_name, model_name, batch_size=16, n_reps=1):
+def run_one(model_name, batch_size, fun_name, n_reps=1):
     framework = MODEL_DICT[model_name]['framework']
     num_classes = MODEL_DICT[model_name]['num_classes']
     if framework == "jax":
@@ -203,17 +197,19 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
     times = []
     if framework == "torch":
         torch.cuda.synchronize()
-    for _ in range(n_reps):
+    for i in range(n_reps):
+        print(
+            f"Running {fun_name} on {model_name}:{batch_size} "
+            f"-- {i/n_reps:.2%}\r", end='', flush=True
+        )
         if fun_name == "grad":
+            start = perf_counter()
             if framework == "jax":
-                start = perf_counter()
                 jax.block_until_ready(grad_fun(params))
-                time = perf_counter() - start
             elif framework == "torch":
-                start = perf_counter()
                 grad_fun(params)
                 torch.cuda.synchronize()
-                time = perf_counter() - start
+            time = perf_counter() - start
             times.append(time)
         else:
             if framework == "jax":
@@ -234,6 +230,8 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
                 grad_time = perf_counter() - start
 
             times.append(time - grad_time)
+
+    print(f"Running {fun_name} on {model_name}:{batch_size} -- done   ")
     return dict(
         model=model_name.split('_')[0],
         fun=fun_name,
@@ -247,48 +245,12 @@ def run_one(fun_name, model_name, batch_size=16, n_reps=1):
 def run_bench(fun_list, model_list, n_reps, batch_size_list,
               slurm_config_path=None):
     run = partial(run_one, n_reps=n_reps)
+    all_runs = list(itertools.product(model_list, batch_size_list, fun_list))
+    skip = []
 
-    with open(slurm_config_path, "r") as f:
-        config = yaml.safe_load(f)
+    jobs = [run(*args) for args in all_runs if args[:-1] not in skip]
 
-    executor = submitit.AutoExecutor("bench_hvp_log")
-    executor.update_parameters(**config)
-    skip = [(64, 'resnet50_torch'), (128, 'resnet50_torch'),
-            (128, 'resnet34_torch'),
-            (128, 'vit_torch'), (128, 'vit_flax'),
-            (64, 'vit_torch'), (32, 'vit_torch'),
-            (64, 'bert_torch'), (128, 'bert_torch')]
-
-    with executor.batch():
-        jobs = [
-            executor.submit(run,
-                            fun_name,
-                            model_name,
-                            batch_size)
-            for fun_name, model_name, batch_size
-            in itertools.product(fun_list, model_list, batch_size_list)
-            if ((batch_size, model_name) not in skip)
-        ]
-
-        # jobs += [
-        #     executor.submit(run,
-        #                     "hvp_reverse_over_reverse",
-        #                     model_name,
-        #                     32)
-        #     for model_name in model_list if (32, model_name) not in skip
-        # ]
-
-    print(f"First job ID: {jobs[0].job_id}")
-
-    for t in progress.track(as_completed(jobs), total=len(jobs)):
-        exc = t.exception()
-        if exc is not None:
-            for tt in jobs:
-                tt.cancel()
-            raise exc
-
-    results = [t.result() for t in jobs]
-    return pd.concat([pd.DataFrame(res) for res in results])
+    return pd.concat([pd.DataFrame(res) for res in jobs])
 
 
 def hvp_forward_over_reverse(model, batch, num_classes=1000, framework="jax"):
@@ -302,14 +264,16 @@ def hvp_forward_over_reverse(model, batch, num_classes=1000, framework="jax"):
                                             num_classes=num_classes)
         )
         hvp_fun = jax.jit(
-            lambda x, v: jax.jvp(grad_fun, (x, ), (v, ))[1]
+            lambda x, v: jax.jvp(grad_fun, (x,), (v,))[1]
         )
     elif framework == "torch":
         def f(x):
             return loss_fn_torch(x, model, batch)
 
+        grad_fun = torch.func.grad(f)
+
         def hvp_fun(x, v):
-            return torch.func.jvp(torch.func.grad(f), (x, ), (v, ))[1]
+            return torch.func.jvp(grad_fun, (x,), (v,))[1]
     return hvp_fun
 
 
@@ -323,7 +287,7 @@ def hvp_reverse_over_forward(model, batch, num_classes=1000, framework="jax"):
             lambda x, v: jax.jvp(
                 lambda y: loss_fn_jax(y, model, batch,
                                       num_classes=num_classes),
-                (x, ), (v, )
+                (x,), (v,)
             )[1]
         )
         hvp_fun = jax.jit(
@@ -334,11 +298,9 @@ def hvp_reverse_over_forward(model, batch, num_classes=1000, framework="jax"):
             return loss_fn_torch(x, model, batch)
 
         def jvp_fun(x, v):
-            return torch.func.jvp(f,
-                                  (x, ), (v, ))[1]
+            return torch.func.jvp(f, (x,), (v,))[1]
 
-        def hvp_fun(x, v):
-            return torch.func.grad(jvp_fun)(x, v)
+        hvp_fun = torch.func.grad(jvp_fun)
 
     return hvp_fun
 
@@ -360,11 +322,15 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
         def f(x):
             return loss_fn_torch(x, model, batch)
 
-        def hvp_fun(x, v):
-            return torch.func.grad(lambda y: sum(
+        grad_fun = torch.func.grad(f)
+
+        hvp_fun = torch.func.grad(
+            lambda x, v: sum(
                 torch.dot(a.ravel(), b.ravel())
-                for a, b in zip(torch.func.grad(f)(y).values(), v.values()))
-            )(x)
+                for a, b in zip(grad_fun(x).values(), v.values())
+            ),
+            argnums=0
+        )
 
     return hvp_fun
 
@@ -377,9 +343,12 @@ if __name__ == '__main__':
     parser.add_argument('--n_reps', '-n', type=int, default=100)
     parser.add_argument('--config', '-c', type=str, default=SLURM_CONFIG)
 
-    framework = parser.parse_args().framework
-    N_REPS = parser.parse_args().n_reps
-    SLURM_CONFIG = parser.parse_args().config
+    args = parser.parse_args()
+    framework = args.framework
+    n_reps = args.n_reps
+    slurm_config = args.config
+
+    batch_size_list = [1, 2, 4, 8, 16, 32, 64, 128]
 
     fun_dict = dict(
         grad=dict(fun=None, label="Gradient"),
@@ -389,9 +358,10 @@ if __name__ == '__main__':
     )
     model_list = [k for k in MODEL_DICT.keys()
                   if MODEL_DICT[k]['framework'] == framework]
+    model_list = ['resnet50_torch']
     fun_list = fun_dict.keys()
 
-    df = run_bench(fun_list, model_list, n_reps=N_REPS,
-                   batch_size_list=BATCH_SIZE_LIST,
-                   slurm_config_path=SLURM_CONFIG)
+    df = run_bench(fun_list, model_list, n_reps=n_reps,
+                   batch_size_list=batch_size_list,
+                   slurm_config_path=slurm_config)
     df.to_parquet(f'../outputs/bench_hvp_time_{framework}.parquet')
