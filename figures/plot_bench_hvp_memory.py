@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-BATCH_SIZE = 16
+BATCH_SIZE = 64
 
 LEGEND_INSIDE = True
 LEGEND_RATIO = 0.1
@@ -25,6 +25,7 @@ STYLES = dict(
 
 MODELS = dict(
     resnet50=dict(label="ResNet50", color="#ffe6e6"),
+    # resnet34=dict(label="ResNet34", color="#ffe6e6"),
     vit=dict(label="ViT", color="#fcf8c1"),
     bert=dict(label="BERT", color="#defcce"),
 )
@@ -40,8 +41,12 @@ mpl.rcParams.update({
 })
 
 df = (
-        pd.read_parquet('../outputs/bench_hvp_memory_jax.parquet')
+        pd.read_parquet('../outputs/bench_hvp_memory_jax3.parquet')
         .reset_index()
+        .query('model != "resnet34"')
+        .query('model != "resnet50_torch"')
+        .query('model != "vit_torch"')
+        .query('model != "bert_torch"')
 )
 
 
@@ -81,7 +86,7 @@ for j, fun in enumerate(df['fun'].unique()):
     )
 
 ax.set_ylabel('Memory (MB)')
-ax.set_xticks(ticks=x + width,
+ax.set_xticks(ticks=x + 1.5*width,
               labels=[MODELS[m]['label']
                       for m in to_plot.loc[:, "model"].unique()],
               fontsize=fontsize)
@@ -112,11 +117,8 @@ for j, model in enumerate(MODELS):
 
 ax.set_xlabel('Batch size')
 
-ax.set_xticks(ticks=to_plot.loc[:, "batch_size"].unique())
-
 ax_legend = fig.add_subplot(gs[0, 1])
 ax_legend.set_axis_off()
 ax_legend.legend(handles=lines, loc='center', ncol=1, fontsize=fontsize)
-# ax.set_ylabel('Memory (MB)')
 
 plt.savefig('bench_hvp_memory_jax.png', dpi=300)

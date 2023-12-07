@@ -308,11 +308,8 @@ def hvp_forward_over_reverse(model, batch, num_classes=1000, framework="jax"):
         def f(x):
             return loss_fn_torch(x, model, batch)
 
-        def grad_fun(x):
-            return torch.func.grad(f)(x)
-
         def hvp_fun(x, v):
-            return torch.func.jvp(grad_fun, (x, ), (v, ))[1]
+            return torch.func.jvp(torch.func.grad(f), (x, ), (v, ))[1]
     return hvp_fun
 
 
@@ -363,13 +360,10 @@ def hvp_reverse_over_reverse(model, batch, num_classes=1000, framework="jax"):
         def f(x):
             return loss_fn_torch(x, model, batch)
 
-        def grad_fun(x):
-            return torch.func.grad(loss_fn_torch)(x, model, batch)
-
         def hvp_fun(x, v):
             return torch.func.grad(lambda y: sum(
                 torch.dot(a.ravel(), b.ravel())
-                for a, b in zip(grad_fun(y).values(), v.values()))
+                for a, b in zip(torch.func.grad(f)(y).values(), v.values()))
             )(x)
 
     return hvp_fun

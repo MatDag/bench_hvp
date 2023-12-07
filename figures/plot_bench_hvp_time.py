@@ -100,19 +100,19 @@ ax_legend = fig.add_subplot(gs[0, 0])
 ax_legend.set_axis_off()
 ax_legend.legend(handles=lines, loc='center', ncol=1, fontsize=fontsize)
 
-ax = fig.add_subplot(gs[1, 1])
+ax = fig.add_subplot(gs[1, 1], sharey=ax)
 
 df_fun = (
-            df.query('fun == @FUN')
-            .groupby(['model', 'batch_size'])
+            df.query('model == "resnet34"')
+            .groupby(['fun', 'batch_size'])
             .quantile([0.2, 0.5, 0.8], numeric_only=True)
 )
 
 lines = []
 
 colors = iter([plt.cm.Set1(i) for i in range(4)])
-for j, model in enumerate(MODELS):
-    to_plot = df_fun.query("model == @model")
+for j, fun in enumerate(STYLES):
+    to_plot = df_fun.query("fun == @fun")
     color = next(colors)
 
     lines.append(
