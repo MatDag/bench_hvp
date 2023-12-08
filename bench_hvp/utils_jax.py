@@ -61,7 +61,7 @@ def loss_fn(params, model, batch):
     return loss
 
 
-def get_batch(model_name, batch_size, num_classes=1000, key=0):
+def get_model_and_batch(model_name, batch_size, num_classes=1000, key=0):
 
     key = jax.random.PRNGKey(key)
     if model_name != "bert_flax":
