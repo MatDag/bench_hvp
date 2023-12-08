@@ -1,4 +1,3 @@
-import time
 from threading import Thread
 
 from pynvml import nvmlDeviceGetMemoryInfo
@@ -25,7 +24,6 @@ class GPUMemoryMonitor(Thread):
         while not self.stop:
             self.memory_buffer.append(nvmlDeviceGetMemoryInfo(handle).used
                                       - memory_start)
-            # time.sleep(0.2)
 
     def join(self):
         self.stop = True
