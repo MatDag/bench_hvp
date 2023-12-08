@@ -57,7 +57,7 @@ def run_one(model_name, batch_size, fun_name, n_reps=1):
             start = perf_counter()
             grad_fun(params)
             grad_time = perf_counter() - start
-            times.append(time - grad_time)
+            return time - grad_time
 
     times = []
     for i in range(n_reps):

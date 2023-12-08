@@ -114,7 +114,6 @@ def cuda_synchronize(f):
     return wrapper
 
 
-@cuda_synchronize
 def get_grad(model, batch):
     """
     Returns the Hessian-vector product operator that uses reverse-over-reverse
@@ -123,10 +122,9 @@ def get_grad(model, batch):
     def f(x):
         return loss_fn(x, model, batch)
 
-    return torch.func.grad(f)
+    return cuda_synchronize(torch.func.grad(f))
 
 
-@cuda_synchronize
 def get_hvp_forward_over_reverse(model, batch):
     """
     Returns the Hessian-vector product operator that uses forward-over-reverse
@@ -139,10 +137,9 @@ def get_hvp_forward_over_reverse(model, batch):
 
     def hvp_fun(x, v):
         return torch.func.jvp(grad_fun, (x,), (v,))[1]
-    return hvp_fun
+    return cuda_synchronize(hvp_fun)
 
 
-@cuda_synchronize
 def get_hvp_reverse_over_forward(model, batch):
     """
     Returns the Hessian-vector product operator that uses reverse-over-forward
@@ -156,7 +153,7 @@ def get_hvp_reverse_over_forward(model, batch):
 
     hvp_fun = torch.func.grad(jvp_fun)
 
-    return hvp_fun
+    return cuda_synchronize(hvp_fun)
 
 
 def get_hvp_reverse_over_reverse(model, batch):
@@ -177,4 +174,4 @@ def get_hvp_reverse_over_reverse(model, batch):
         argnums=0
     )
 
-    return hvp_fun
+    return cuda_synchronize(hvp_fun)

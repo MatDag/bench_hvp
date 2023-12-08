@@ -43,7 +43,7 @@ mpl.rcParams.update({
 })
 
 df = (
-        pd.read_parquet('../outputs/bench_hvp_time_torch.parquet')
+        pd.read_parquet('../outputs/bench_hvp_time_jax.parquet')
         # .reset_index().query('model != "resnet50"')
 )
 models = df['model'].unique()
