@@ -81,7 +81,33 @@ def run_one(model_name, batch_size, fun_name, n_reps=1):
 def run_bench(fun_list, model_list, n_reps, batch_size_list,
               slurm_config_path=None):
     all_runs = list(itertools.product(model_list, batch_size_list, fun_list))
-    skip = [("resnet50_torch", 160, "hvp_reverse_over_reverse")]
+    skip = [
+        ("resnet50_torch", 160, "hvp_reverse_over_reverse"),
+        ("vit_torch", 128, "hvp_reverse_over_reverse"),
+        ("vit_torch", 128, "hvp_forward_over_reverse"),
+        ("vit_torch", 128, "hvp_reverse_over_forward"),
+        ("vit_torch", 128, "grad"),
+        ("vit_torch", 64, "hvp_reverse_over_reverse"),
+        ("vit_torch", 64, "hvp_forward_over_reverse"),
+        ("vit_torch", 64, "hvp_reverse_over_forward"),
+        ("vit_torch", 64, "grad"),
+        ("vit_torch", 32, "hvp_reverse_over_reverse"),
+        ("vit_torch", 32, "hvp_forward_over_reverse"),
+        ("vit_torch", 32, "hvp_reverse_over_forward"),
+        ("vit_torch", 32, "grad"),
+        ("bert_torch", 128, "hvp_reverse_over_reverse"),
+        ("bert_torch", 128, "hvp_forward_over_reverse"),
+        ("bert_torch", 128, "hvp_reverse_over_forward"),
+        ("bert_torch", 128, "grad"),
+        ("bert_torch", 64, "hvp_reverse_over_reverse"),
+        ("bert_torch", 64, "hvp_forward_over_reverse"),
+        ("bert_torch", 64, "hvp_reverse_over_forward"),
+        ("bert_torch", 64, "grad"),
+        ("vit_flax", 128, "hvp_reverse_over_reverse"),
+        ("vit_flax", 128, "hvp_forward_over_reverse"),
+        ("vit_flax", 128, "hvp_reverse_over_forward"),
+        ("vit_flax", 128, "grad"),
+    ]
 
     jobs = [
         run_one(*args, n_reps=n_reps) for args in all_runs if args not in skip
@@ -109,9 +135,8 @@ if __name__ == '__main__':
     ]
     model_list = [k for k in MODEL_DICT.keys()
                   if MODEL_DICT[k]['framework'] == framework]
-    model_list = ['resnet50_torch']
 
     df = run_bench(fun_list, model_list, n_reps=args.n_reps,
-                   batch_size_list=batch_size_list[::-1],
+                   batch_size_list=batch_size_list,
                    slurm_config_path=args.config)
     df.to_parquet(f'../outputs/bench_hvp_time_{framework}.parquet')
