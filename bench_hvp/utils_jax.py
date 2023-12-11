@@ -61,10 +61,12 @@ def loss_fn(params, model, batch):
     return loss
 
 
-def get_model_and_batch(model_name, batch_size, num_classes=1000, key=0):
+def get_model_and_batch(model_name, batch_size, num_classes=1000,
+                        sequence_length=32, key=0):
 
     key = jax.random.PRNGKey(key)
     if model_name != "bert_flax":
+        image_size = 128 if model_name == "vit_flax" else 224
         key, subkey = jax.random.split(key)
         batch = {
             'images': jax.random.normal(key, (batch_size, 224, 224, 3)),
@@ -76,13 +78,13 @@ def get_model_and_batch(model_name, batch_size, num_classes=1000, key=0):
         keys = jax.random.split(key, 4)
         batch = {
             'input_ids': jax.random.randint(
-                keys[0], (batch_size, 128), 0, 10000
+                keys[0], (batch_size, sequence_length), 0, 10000
             ),
             'attention_mask': jax.random.randint(
-                keys[1], (batch_size, 128), 0, 2
+                keys[1], (batch_size, sequence_length), 0, 2
             ),
             'token_type_ids': jax.random.randint(
-                keys[2], (batch_size, 128), 0, 2
+                keys[2], (batch_size, sequence_length), 0, 2
             ),
             'position_ids': None,
             'head_mask': None,
@@ -94,6 +96,12 @@ def get_model_and_batch(model_name, batch_size, num_classes=1000, key=0):
     model = JAX_MODELS[model_name]['module'].from_pretrained(
         JAX_MODELS[model_name]['model']
     )
+
+    if model_name == "vit_flax":
+        config = model.config
+        config.image_size = image_size
+        model = JAX_MODELS[model_name]['module'](config)
+
     params = model.params
     if "params" not in params.keys():
         params = {"params": params}

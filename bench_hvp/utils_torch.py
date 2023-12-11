@@ -63,12 +63,15 @@ def loss_fn(params, model, batch):
     return loss + weight_penalty
 
 
-def get_model_and_batch(model_name, batch_size, num_classes, key=0):
+def get_model_and_batch(model_name, batch_size, num_classes=1000,
+                        sequence_length=32, key=0):
     gen = torch.Generator().manual_seed(key)
 
     if model_name != "bert_torch":
+        image_size = 128 if model_name == "vit_torch" else 224
         batch = {
-            'images': torch.randn(batch_size, 3, 224, 224, generator=gen),
+            'images': torch.randn(batch_size, 3, image_size,
+                                  image_size, generator=gen),
             'labels': torch.randint(
                 0, num_classes, (batch_size,), generator=gen
             )
@@ -76,13 +79,13 @@ def get_model_and_batch(model_name, batch_size, num_classes, key=0):
     else:
         batch = {
             'input_ids': torch.randint(
-                0, 10000, (batch_size, 128), generator=gen
+                0, 10000, (batch_size, sequence_length), generator=gen
             ),
             'attention_mask': torch.randint(
-                0, 2, (batch_size, 128), generator=gen
+                0, 2, (batch_size, sequence_length), generator=gen
             ),
             'token_type_ids': torch.randint(
-                0, 2, (batch_size, 128), generator=gen
+                0, 2, (batch_size, sequence_length), generator=gen
             ),
             'position_ids': None,
             'head_mask': None,
@@ -95,6 +98,11 @@ def get_model_and_batch(model_name, batch_size, num_classes, key=0):
         TORCH_MODELS[model_name]['model']
     )
     replace_all_batch_norm_by_noop(model)
+
+    if model_name == "vit_torch":
+        config = model.config
+        config.image_size = image_size
+        model = TORCH_MODELS[model_name]['module'](config)
 
     if torch.cuda.is_available():
         model = model.cuda()
