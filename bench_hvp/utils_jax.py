@@ -66,10 +66,11 @@ def get_model_and_batch(model_name, batch_size, num_classes=1000,
 
     key = jax.random.PRNGKey(key)
     if model_name != "bert_flax":
-        image_size = 128 if model_name == "vit_flax" else 224
+        image_size = 96 if model_name == "vit_flax" else 224
         key, subkey = jax.random.split(key)
         batch = {
-            'images': jax.random.normal(key, (batch_size, 224, 224, 3)),
+            'images': jax.random.normal(key, (batch_size, image_size,
+                                              image_size, 3)),
             'labels': common_utils.onehot(jax.random.randint(
                 subkey, (batch_size,), 0, num_classes
             ), num_classes=num_classes)
@@ -96,7 +97,6 @@ def get_model_and_batch(model_name, batch_size, num_classes=1000,
     model = JAX_MODELS[model_name]['module'].from_pretrained(
         JAX_MODELS[model_name]['model']
     )
-
     if model_name == "vit_flax":
         config = model.config
         config.image_size = image_size

@@ -68,7 +68,7 @@ def get_model_and_batch(model_name, batch_size, num_classes=1000,
     gen = torch.Generator().manual_seed(key)
 
     if model_name != "bert_torch":
-        image_size = 128 if model_name == "vit_torch" else 224
+        image_size = 96 if model_name == "vit_torch" else 224
         batch = {
             'images': torch.randn(batch_size, 3, image_size,
                                   image_size, generator=gen),
