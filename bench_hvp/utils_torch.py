@@ -1,9 +1,13 @@
 
 import torch
 
+from transformers.utils import logging
+
 from transformers import ViTForImageClassification
 from transformers import ResNetForImageClassification
 from transformers import BertForSequenceClassification
+
+logging.set_verbosity_warning()
 
 BATCH_NORM_NOOP = True
 
