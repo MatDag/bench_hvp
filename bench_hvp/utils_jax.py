@@ -3,13 +3,9 @@ import optax
 import jax.numpy as jnp
 from flax.training import common_utils
 
-from transformers.utils import logging
-
 from transformers import FlaxViTForImageClassification
 from transformers import FlaxResNetForImageClassification
 from transformers import FlaxBertForSequenceClassification
-
-logging.set_verbosity_warning()
 
 JAX_MODELS = dict(
     resnet34_flax=dict(

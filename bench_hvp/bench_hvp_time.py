@@ -4,6 +4,10 @@ import pandas as pd
 from joblib import Memory
 from time import perf_counter
 
+from transformers.utils import logging
+
+logging.set_verbosity_error()
+
 
 try:
     import utils_jax
@@ -78,15 +82,11 @@ def run_one(model_name, batch_size, fun_name, n_reps=1):
     )
 
 
-def run_bench(fun_list, model_list, n_reps, batch_size_list,
-              slurm_config_path=None):
+def run_bench(fun_list, model_list, n_reps, batch_size_list):
     all_runs = list(itertools.product(model_list, batch_size_list, fun_list))
-    skip = [
-        ("resnet50_torch", 160, "hvp_reverse_over_reverse"),
-    ]
 
     jobs = [
-        run_one(*args, n_reps=n_reps) for args in all_runs if args not in skip
+        run_one(*args, n_reps=n_reps) for args in all_runs
     ]
 
     return pd.concat([pd.DataFrame(res) for res in jobs])
@@ -98,7 +98,6 @@ if __name__ == '__main__':
     parser.add_argument('--framework', '-f', type=str, default='jax',
                         choices=['jax', 'torch'])
     parser.add_argument('--n_reps', '-n', type=int, default=100)
-    parser.add_argument('--config', '-c', type=str, default='config/slurm.yml')
 
     args = parser.parse_args()
     framework = args.framework
@@ -113,6 +112,5 @@ if __name__ == '__main__':
                   if MODEL_DICT[k]['framework'] == framework]
 
     df = run_bench(fun_list, model_list, n_reps=args.n_reps,
-                   batch_size_list=batch_size_list,
-                   slurm_config_path=args.config)
+                   batch_size_list=batch_size_list)
     df.to_parquet(f'../outputs/bench_hvp_time_{framework}.parquet')
