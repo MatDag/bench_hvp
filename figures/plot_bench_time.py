@@ -6,16 +6,16 @@ import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--file', '-f', type=str,
-                    default='../outputs/bench_hvp_time_jax_last.parquet')
+                    default='../outputs/bench_hvp_time_jax.parquet')
 
 filename = parser.parse_args().file
 
 LEGEND_INSIDE = True
 LEGEND_RATIO = 0.1
 DEFAULT_WIDTH = 8
-DEFAULT_HEIGHT = 6
+DEFAULT_HEIGHT = 4
 
-fontsize = 7
+fontsize = 12
 
 STYLES = dict(
     grad=dict(label='Gradient', color='#5778a4'),
@@ -29,7 +29,6 @@ STYLES = dict(
 
 
 MODELS = dict(
-    # resnet50=dict(label="ResNet50", color="#ffe6e6", ord=1),
     resnet34=dict(label="ResNet34", color="#ffe6e6", ord=1),
     bert=dict(label="BERT", color="#defcce", ord=2),
     vit=dict(label="ViT", color="#fcf8c1", ord=3),
@@ -38,11 +37,11 @@ MODELS = dict(
 FUN = "hvp_forward_over_reverse"
 
 mpl.rcParams.update({
-    'font.size': 10,
-    'legend.fontsize': 'small',
-    'axes.labelsize': 'small',
-    'xtick.labelsize': 'small',
-    'ytick.labelsize': 'small'
+    'font.size': fontsize,
+    'legend.fontsize': fontsize,
+    'axes.labelsize': fontsize,
+    'xtick.labelsize': fontsize,
+    'ytick.labelsize': fontsize
 })
 
 df = (
@@ -120,11 +119,6 @@ ax.set_xticks(ticks=x + 1.5*width,
               labels=[MODELS[m]['label'] for m in models],
               fontsize=fontsize)
 
-# ax_legend = fig.add_subplot(gs[0, 0])
-# ax_legend.set_axis_off()
-# ax_legend.legend(handles=lines, loc='center', ncol=1, fontsize=fontsize)
-
-
 df = (
     df
     .groupby(['fun', 'model', 'batch_size'])
@@ -150,7 +144,6 @@ for fun in funs:
             label=STYLES[fun]['label'],
         )[0]
     )
-
     ax.fill_between(
         to_plot.index.get_level_values(1).unique(),
         to_plot.iloc[to_plot.index.get_level_values(2) == .2]["time"],
@@ -160,11 +153,8 @@ for fun in funs:
     )
 
 ax.set_xlabel('Batch size')
-ax.set_ylabel('Time [sec]')
 ax_legend = fig.add_subplot(gs[0, :])
 ax_legend.set_axis_off()
-ax_legend.legend(handles=lines, loc='center', ncol=4, fontsize=fontsize)
-
-fig.suptitle(frameworks)
+ax_legend.legend(handles=lines, loc='center', ncol=2, fontsize=fontsize)
 
 plt.savefig(f'bench_hvp_time_{frameworks}.png', dpi=300)
