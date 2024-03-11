@@ -13,9 +13,9 @@ filename = parser.parse_args().file
 LEGEND_INSIDE = True
 LEGEND_RATIO = 0.1
 DEFAULT_WIDTH = 8
-DEFAULT_HEIGHT = 6
+DEFAULT_HEIGHT = 4
 
-fontsize = 7
+fontsize = 12
 
 STYLES = dict(
     grad=dict(label='Gradient', color='#5778a4'),
@@ -29,7 +29,6 @@ STYLES = dict(
 
 
 MODELS = dict(
-    # resnet50=dict(label="ResNet50", color="#ffe6e6", ord=1),
     resnet34=dict(label="ResNet34", color="#ffe6e6", ord=1),
     bert=dict(label="BERT", color="#defcce", ord=2),
     vit=dict(label="ViT", color="#fcf8c1", ord=3),
@@ -38,11 +37,11 @@ MODELS = dict(
 FUN = "hvp_forward_over_reverse"
 
 mpl.rcParams.update({
-    'font.size': 10,
-    'legend.fontsize': 'small',
-    'axes.labelsize': 'small',
-    'xtick.labelsize': 'small',
-    'ytick.labelsize': 'small'
+    'font.size': fontsize,
+    'legend.fontsize': fontsize,
+    'axes.labelsize': fontsize,
+    'xtick.labelsize': fontsize,
+    'ytick.labelsize': fontsize
 })
 
 df = (
@@ -53,7 +52,7 @@ models = df['model'].unique()
 funs = df['fun'].unique()
 for model in models:
     df.loc[df['model'] == model, 'ord'] = MODELS[model]['ord']
-
+df.loc[:, 'memory'] = df.loc[:, 'memory'] / 1024
 frameworks = df['framework'].unique()
 frameworks = " / ".join(frameworks)
 
@@ -90,10 +89,10 @@ def filtre_max_batch_size(df, max_batch_sizes):
     return new_df
 
 
-df_max_batch_size = filtre_max_batch_size(df, max_batch_sizes)
+df_batch_size_64 = df.query("batch_size == 64")
 
 for j, fun in enumerate(df['fun'].unique()):
-    to_plot = df_max_batch_size.query("fun == @fun")
+    to_plot = df_batch_size_64.query("fun == @fun")
 
     lines.append(
         ax.bar(
@@ -110,7 +109,7 @@ for j, fun in enumerate(df['fun'].unique()):
         )
     )
 
-ax.set_ylabel('Memory (MB)')
+ax.set_ylabel('Memory [GiB]')
 ax.set_xticks(ticks=x + 1.5*width,
               labels=[MODELS[m]['label'] for m in models],
               fontsize=fontsize)
@@ -136,11 +135,11 @@ for fun in funs:
 
 
 ax.set_xlabel('Batch size')
-ax.set_ylabel('Memory (MB)')
 ax_legend = fig.add_subplot(gs[0, :])
 ax_legend.set_axis_off()
-ax_legend.legend(handles=lines, loc='center', ncol=4, fontsize=fontsize)
+ax_legend.legend(handles=lines, loc='center', ncol=2, fontsize=fontsize)
 
-fig.suptitle(frameworks)
-
-plt.savefig(f'bench_hvp_memory_{frameworks}.png', dpi=300)
+if "without" in filename:
+    plt.savefig(f'bench_hvp_memory_{frameworks}_without_jit.png', dpi=300)
+else:
+    plt.savefig(f'bench_hvp_memory_{frameworks}.png', dpi=300)

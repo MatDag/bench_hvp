@@ -89,11 +89,11 @@ def filtre_max_batch_size(df, max_batch_sizes):
     return new_df
 
 
-df_max_batch_size = filtre_max_batch_size(df, max_batch_sizes)
+df_batch_size_64 = df.query("batch_size == 64")
 
 for j, fun in enumerate(df['fun'].unique()):
     to_plot = (
-        df_max_batch_size.query("fun == @fun")
+        df_batch_size_64.query("fun == @fun")
         .groupby(['model'])
         .quantile([0.2, 0.5, 0.8], numeric_only=True)
         .unstack().sort_values(by=('ord', 0.5))

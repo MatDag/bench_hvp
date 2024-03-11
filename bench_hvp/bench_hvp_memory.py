@@ -3,6 +3,9 @@ import pandas as pd
 
 from memory_monitor import GPUMemoryMonitor
 
+from transformers.utils import logging
+
+logging.set_verbosity_error()
 
 try:
     import utils_jax
@@ -50,6 +53,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--framework', '-f', type=str, default='jax',
                         choices=['jax', 'torch'])
+    parser.add_argument('--jit', '-j', type=str, default="activate")
     parser.add_argument('--fun', type=str, default='grad',
                         choices=['grad', 'hvp_forward_over_reverse',
                                  'hvp_reverse_over_forward',
@@ -58,11 +62,20 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', '-b', type=int, default=16)
 
     framework = parser.parse_args().framework
+    jit_fun = parser.parse_args().jit == "activate"
     fun_name = parser.parse_args().fun
     model_name = parser.parse_args().model
     batch_size = parser.parse_args().batch_size
     model_list = [k for k in MODEL_DICT.keys()
                   if MODEL_DICT[k]['framework'] == framework]
+
+    jax_and_no_jit = framework == "jax" and not jit_fun
+    if jax_and_no_jit:
+        from jax.config import config
+        config.update('jax_disable_jit', True)
+        path_out = '../outputs/bench_hvp_memory_jax_without_jit.parquet'
+    else:
+        path_out = f'../outputs/bench_hvp_memory_{framework}.parquet'
 
     print(f'Running {fun_name} on {model_name} ' +
           f'with batch size {batch_size}.')
@@ -70,19 +83,19 @@ if __name__ == '__main__':
     memory = run_one(fun_name, model_name, batch_size)
     memory /= 1024**2
     print(f"Peak memory usage: {memory:.2f} MiB")
-    if os.path.exists(f'../outputs/bench_hvp_memory_{framework}.parquet'):
-        df = pd.read_parquet(
-            f'../outputs/bench_hvp_memory_{framework}.parquet'
-        )
+    if os.path.exists(path_out):
+        df = pd.read_parquet(path_out)
         df.loc[
-            (model_name.split('_')[0], fun_name, batch_size), 'memory'
+            (model_name.split('_')[0], fun_name, batch_size, framework),
+            'memory'
         ] = memory
     else:
         df = pd.DataFrame(dict(
             model=[model_name.split('_')[0]],
             fun=[fun_name],
             batch_size=[batch_size],
-            memory=[memory]
-        )).set_index(['model', 'fun', 'batch_size'])
+            memory=[memory],
+            framework=[framework]
+        )).set_index(['model', 'fun', 'batch_size', 'framework'])
 
-    df.to_parquet(f'../outputs/bench_hvp_memory_{framework}.parquet')
+    df.to_parquet(path_out)
