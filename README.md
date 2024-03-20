@@ -51,8 +51,8 @@ $ python plot_bench_time.py -f ../outputs/bench_hvp_time_XXX.parquet
 ```
 
 The figures are stored in the folder `figures`.
-![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_time_jax.pdf)
-![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_time_torch.pdf)
+![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_time_jax.png)
+![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_time_torch.png)
 
 ### Memory complexity
 
@@ -71,6 +71,6 @@ $ python plot_bench_memory.py -f ../outputs/bench_hvp_memory_XXX.parquet
 where `XXX` can be replaced by `jax`, `jax_without_jit` or `torch`.
 The figures are stored in the folder `figures`.
 
-![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_jax.pdf)
-![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_jax_without_memory.pdf)
-![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_torch.pdf)
+![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_jax.png)
+![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_jax_without_jit.png)
+![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_torch.png)
