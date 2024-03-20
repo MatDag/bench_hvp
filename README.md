@@ -72,5 +72,5 @@ where `XXX` can be replaced by `jax`, `jax_without_jit` or `torch`.
 The figures are stored in the folder `figures`.
 
 ![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_jax.png)
-![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_jax_without_memory.png)
+![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_jax_without_jit.png)
 ![alt text](https://github.com/MatDag/bench_hvp/blob/main/figures/bench_hvp_memory_torch.png)
