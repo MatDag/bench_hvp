@@ -1,6 +1,7 @@
 # Benchmark Hessian-vector product
 
-This Python repo hosts the code of the blogpost about Hessian-vector products.
+This Python repo hosts the code of the blog post "[How to compute Hessian-vector products?](https://iclr-blogposts.github.io/2024/blog/bench-hvp/)" published in the blog post track of ICLR 2024.
+This blog post [received a highlight](https://blog.iclr.cc/2024/04/02/blogposts-track-iclr-2023-announcing-accepted-blogposts/).
 
 ## Installation
 
